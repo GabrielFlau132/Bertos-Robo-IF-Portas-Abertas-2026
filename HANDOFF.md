@@ -1,90 +1,136 @@
-# Handoff — Controle por gestos do robô de batalha
+# Handoff — Robô Bertos (IF Portas Abertas 2026)
+
+Estado em **2026-09-24**. Leia inteiro antes de mexer em qualquer coisa.
 
 ## Objetivo
-Controlar o robô de batalha (ESP32 + Bluepad32) de dois jeitos: pelo controle de PS4 e por gestos dos braços, reconhecidos por webcam em Python. **Fase atual: só o reconhecimento**, testado num simulador. O robô real vem depois.
+Robô de batalha (categoria cupim) pilotado de **dois jeitos, um de cada vez**:
+1. **Controle de PS3** (Bluepad32 na ESP32) — **funcionando**.
+2. **Gestos dos braços** por webcam (Python + MediaPipe) — reconhecimento funcionando **só no simulador**, ainda não conectado ao robô.
 
-## Ambiente
-- Windows, pasta do projeto `C:\Users\IF maker\Desktop\Bertos`
-- Python 3.12 em venv (`venv\Scripts\activate`)
-- `mediapipe==0.10.14` + `opencv-python`. Versões mais novas do mediapipe não têm `mp.solutions`, **não atualizar**.
+A escolha do modo será feita **pelo controle, com R1 e L1** (pedido do usuário). Ainda não implementado — ver "Próxima fase".
 
-## Arquivos
-| Arquivo | Função |
+## Resumo do estado
+| Parte | Estado |
 |---|---|
-| `controle_mao.py` | Webcam → MediaPipe Hands (2 mãos) + Pose → calcula `acel`, `dire`, `arma` → simulador e/ou UDP. HUD visual (tema vermelho/dourado) e calibração automática por gesto. |
-| `sim_robo.py` | Robô virtual visto de cima (mistura tipo tanque), desenhado ao lado da câmera. Não foi mexido nesta sessão. |
-| `modo_mao.h` | Lado ESP32: softAP `RoboBatalha`/`12345678`, UDP 4210, timeout de 300 ms → zera o comando. **Ainda não integrado ao `.ino`**. Não foi mexido nesta sessão. |
+| Firmware do robô com controle | ✅ funcionando no robô (`firmware/codigo_robo_controle_p3`) |
+| Motores / placa | ✅ motores religados nos bornes certos |
+| Gestos (Python) | ✅ no simulador · ❌ não envia nada pro robô (`ENVIAR_UDP = False`) |
+| `modo_mao.h` (UDP na ESP32) | ❌ não integrado ao firmware |
+| Integração controle + gestos | ⏳ **aguardando confirmação do usuário pra começar** |
 
-Flags no topo de `controle_mao.py`: `SIMULAR = True`, `ENVIAR_UDP = False`, `DEBUG = True` (imprime diagnóstico no terminal a cada ~0.3s).
+---
 
-## Mapeamento de controle (definido pelo usuário — não mudar)
-**Braço direito (locomoção)**
-- Mão aberta = anda. Mão fechada ou fora da câmera = para.
-- Mão pra frente, em direção à câmera = acelera. Pra trás = ré.
-- Direção do braço (esquerda/direita em relação ao ombro) = curva.
+## Base oficial (muito importante)
+Tudo do robô vem de **https://github.com/nrc-cupim/start-automacao-eletrica** (kit "start_Engenharia Automação e Elétrica", Inatel), commit `a52bbf3`.
+- **Não usar** `nrc-cupim/cupim_start_inatel` — foi mandado por engano no começo e gerou confusão.
+- O usuário quer o firmware **o mais fiel possível ao código oficial**: mudanças mínimas, sempre explicadas no topo do arquivo.
+- Documentação oficial útil: `Apostilas/apostila_completa_firmware.pdf`, `Apostilas/apostila_completa_hardware.pdf`, `Codigos/funcoes-controle.png` (mapa dos botões oficial).
+- Procedimento oficial: gravar `filtro_mac_controle` (opcional, trava a ESP32 num controle) → gravar o código principal.
 
-**Braço esquerdo (arma)**
-- Mão aberta = ativa. Fechada = para.
-- Frente/trás define o sentido de rotação.
-- Deve girar bem rápido: ao sair da zona morta já entra em `ARMA_MIN = 70%`.
+## Hardware
+- Placa **START_AUTOMACAO_ELETRICA**: ESP32 WROOM-32 **DevKit v1** + 2× **DRV8833** + regulador 7805 (bateria → 5 V → VIN da ESP32; bateria direto no VCC dos DRV).
+- Bornes serigrafados na placa (conferido no esquemático do repositório oficial):
 
-## Como está implementado hoje
-- Frame espelhado (`cv2.flip`). Como o frame já é espelhado antes de processar, o `label` ("Left"/"Right") que o MediaPipe Hands devolve em `multi_handedness` já corresponde à mão real da pessoa — é isso que identifica `mao_d`/`mao_e` agora (substituiu a lógica antiga por posição x em relação ao meio dos ombros, que ficava errada se os braços cruzassem).
-- **Profundidade** = tamanho da palma em px (max de 0→9 e 5→17) ÷ largura dos ombros em px, comparado ao valor calibrado.
-- **Curva** = offset horizontal do punho direito em relação ao ombro direito, em larguras de ombro, menos o neutro calibrado.
-- **Mão aberta** = pelo menos 3 dedos com a ponta mais longe do punho que a articulação PIP (`mao_aberta()`).
-- Suavização EMA (`SUAVIZACAO = 0.4`), zona morta e alcance configuráveis no topo (`PROF_DZ`, `PROF_ALCANCE`, `CURVA_DZ`, `CURVA_ALCANCE`).
-- **Calibração automática por gesto (NOVO, é o que está quebrado — ver seção de baixo):** `pose_cruzada(plm)` (linha ~90) detecta os braços em X (pulso direito passou do ombro esquerdo, pulso esquerdo passou do ombro direito, os dois acima da linha do quadril). Ao detectar, inicia uma contagem de `CAL_AUTO_SEGUNDOS = 3.0` segundos (`segurando_desde`, checado a cada frame dentro do `if largura > 20:`, por volta da linha 200 de `controle_mao.py`). Enquanto conta, `acel`/`dire`/`arma` ficam forçados em 0 (o robô para) porque nenhum branch os recalcula nesse estado. Quando a contagem chega a 0, se `mao_d`, `mao_e`, `ab_d` e `ab_e` (mãos detectadas E abertas nesse exato frame) forem verdade, salva `cal = {"r_dir":..., "x_dir":..., "r_arma":...}`; senão mostra `CALIBRACAO FALHOU: abra as duas maos`. O gatilho X é checado todo frame (mesmo já calibrado), então dá pra recalibrar a qualquer momento repetindo o gesto.
-- Tecla `c` calibra na hora (exige as duas mãos abertas no mesmo frame). Tecla `r` reseta o simulador, `q` sai.
-- **Visual:** esqueleto da Pose sem os pontos do rosto (`POSE_SEM_ROSTO`, filtra landmarks 0–10), cor vermelho/dourado (`COR_HUD`, `COR_HUD_OURO`) em vez do azul/ciano original — pedido do usuário pra parecer "tipo Tony Stark". Mãos desenhadas em verde (direita/locomoção) e magenta (esquerda/arma), com retículo tipo mira nos 4 cantos de cada mão (`desenhar_alvo`/`cantos`). Painel HUD semitransparente no canto superior esquerdo com o estado, leituras e barra de progresso da calibração. Moldura de cantos ao redor do vídeo inteiro.
-- Protocolo UDP, 5 bytes: `struct.pack("<BbbbB", 0xAA, acel, dire, arma, seq)`. `acel`, `dire` e `arma` vão de -100 a 100.
+  | Borne | Pinos ESP32 | No código |
+  |---|---|---|
+  | ESQUERDO | 27 / 14 | `PINO_x_MOTOR_ESQUERDO` |
+  | ARMA2 | 12 / 13 | `PINO_x_ARMA2` |
+  | ARMA1 | 32 / 33 | `PINO_x_ARMA1` |
+  | DIREITO | 25 / 26 | `PINO_x_MOTOR_DIREITO` |
 
-## PROBLEMA ATUAL (começar por aqui)
-**A calibração automática por gesto de X não está completando.** Segundo o usuário: "ele fica tentando calibrar e não consegue" — ou seja, o X é detectado, a contagem de 3s aparece na tela, mas ao final ela falha (mostra `CALIBRACAO FALHOU`) e o ciclo parece reiniciar sem nunca calibrar de verdade.
+- LED azul da ESP32 (GPIO 2) = trava das setas ligada.
+- Histórico: numa tentativa o robô não andava porque uma roda estava no borne ARMA1 e o ESQUERDO estava vazio. O usuário religou; hoje está certo.
+- **A ESP32 não fica ligada no PC e no robô ao mesmo tempo.** Grava no PC (USB) → leva pro robô → testa. Não há monitor serial com o robô rodando; diagnóstico no robô é pelo que o usuário observa.
+- Windows precisa do driver **CP210x** (sem ele: erro 28 no Gerenciador de Dispositivos). Nesta máquina a ESP32 aparece na **COM11**.
 
-O código relevante está em `controle_mao.py`, dentro do `if largura > 20:` (por volta da linha 182 em diante):
-```python
-if segurando_desde is None and pose_cruzada(plm):
-    segurando_desde = agora
+## Controle
+- **PS3 paralelo**, MAC `98:B6:37:E7:3E:F7`. O Bluepad32 o reconhece como **controle HID genérico** (não como DS3): pareia pelo Bluetooth comum, **não precisa de SixaxisPairTool**. Ligado no PC por USB ele aparece como "Xbox 360" — irrelevante.
+- Leituras medidas com `descobrir_parametros_controle`:
 
-if segurando_desde is not None:
-    restante = CAL_AUTO_SEGUNDOS - (agora - segurando_desde)
-    progresso_cal = max(0.0, min(1.0, 1 - restante / CAL_AUTO_SEGUNDOS))
-    if restante <= 0:
-        if mao_d and mao_e and ab_d and ab_e:
-            cal = {"r_dir": r_d, "x_dir": x_d, "r_arma": r_e}
-            cal_msg, cal_msg_ate = "CALIBRADO!", agora + 1.5
-        else:
-            cal_msg = "CALIBRACAO FALHOU: abra as duas maos"
-            cal_msg_ate = agora + 1.5
-        segurando_desde = None
-        ...
+  | Comando | Leitura na Bluepad32 |
+  |---|---|
+  | R2 | `throttle()` 0 ou 1020 — **só liga/desliga**, sem valor intermediário (bit 0x0080) |
+  | L2 | `brake()` 0 ou 1020 — só liga/desliga (bit 0x0040) |
+  | Analógico direito → direita / esquerda | `axisRX()` +508 / −512 |
+  | Analógico direito → cima / baixo | `axisRY()` −512 / +508 |
+
+- **Pareamento:** gravar `descobrir_parametros_controle` (ele faz `forgetBluetoothKeys()`), colocar o controle em modo de pareamento, esperar "controle conectado" no serial, depois gravar o código principal. O código principal não apaga as chaves, então o controle reconecta sozinho depois.
+
+## Firmware em uso: `firmware/codigo_robo_controle_p3`
+Código oficial com **duas** mudanças (listadas no topo do `.ino`):
+1. **R2 = frente, L2 = trás, analógico direito (horizontal) = direção.** Os gatilhos são convertidos pra mesma escala do analógico vertical, então a lógica oficial de mistura dos motores ficou intacta. Se o controle só mandar o botão do gatilho, apertado vale 100%. L1/R1 e o analógico esquerdo ficaram **livres** (a troca de analógicos do oficial foi removida).
+2. **Sentido padrão dos motores ao ligar = o da seta pra baixo** (testado no robô: R2 anda reto pra frente).
+
+| Comando | Função |
+|---|---|
+| START / SELECT | liga / desliga o robô |
+| R2 / L2 | frente / trás (100%, o controle não é proporcional) |
+| Analógico direito ↔ | direção (sem gatilho, gira no lugar) |
+| O / □ | arma num sentido / no outro (100% na hora) |
+| △ | desliga a arma |
+| Setas | mudam o sentido das rodas (padrão = seta ↓) |
+| L3 + R3 | trava/destrava as setas (LED azul) |
+| L1, R1, analógico esquerdo | sem função (L1/R1 reservados pra escolha de modo) |
+
+Comportamentos do código oficial que continuam (não foram "consertados" de propósito, pra manter fidelidade):
+- A arma vai de 0 a 100% instantaneamente (sem partida suave). Histórico do usuário: partidas bruscas já derrubaram a alimentação e resetaram o rádio numa versão anterior.
+- A trava L3+R3 alterna a cada leitura enquanto os botões ficam apertados — às vezes precisa apertar de novo.
+- Imprime no serial a cada leitura do controle.
+- Pendência aberta com o usuário: ele pediu "acelerar" a arma; ela já está em 100% — perguntar se quer partida suave ou outra coisa.
+
+Comparação feita no PC (bibliotecas falsas): com os mesmos comandos, os PWMs das rodas saem iguais aos do código oficial (diferença de 1 ponto de PWM em ré a 50%, arredondamento).
+
+### Gravar
+```bash
+arduino-cli compile --fqbn esp32-bluepad32:esp32:esp32 firmware/codigo_robo_controle_p3
+arduino-cli upload -p COM11 --fqbn esp32-bluepad32:esp32:esp32 firmware/codigo_robo_controle_p3
 ```
+Core: `esp32-bluepad32:esp32` 4.1.0 (URLs de placa no `README.md`). Se travar em `Connecting...`, segurar o botão BOOT.
 
-Hipóteses, da mais provável para a menos provável:
-1. **A checagem final é de um único frame.** `restante <= 0` só passa em UM frame específico (o primeiro após os 3s baterem), e nesse exato frame exige `mao_d and mao_e and ab_d and ab_e` simultaneamente. Sair da pose de X (braços cruzados no peito) para mãos abertas na posição neutra é um movimento rápido — é bem provável que bem na hora que os 3s terminam, uma das mãos esteja em movimento, borrada, momentaneamente fora do quadro do MediaPipe Hands, ou ainda não "aberta" o bastante pra `mao_aberta()` contar 3 dedos esticados. Isso faria a calibração falhar quase toda vez, mesmo que o usuário esteja "com as mãos abertas" ao olho nu.
-2. **`pose_cruzada()` pode estar re-disparando rápido demais.** Se, logo após uma falha, os braços do usuário ainda não descruzaram completamente (ou o corpo ainda está na pose intermediária), `pose_cruzada(plm)` pode voltar a ser `True` no frame seguinte e reiniciar a contagem de 3s imediatamente — dando a sensação de "ele fica tentando e não consegue", quando na prática está reiniciando o ciclo repetidamente.
-3. **`mao_aberta()` pode estar sendo exigente demais** logo após o movimento de descruzar os braços (ângulo da mão em relação à câmera nesse momento pode não deixar 3 dedos claramente mais longe do punho que o PIP).
-4. **Falta de visibilidade no terminal.** O log de `DEBUG` (por volta da linha 245-253) hoje só imprime `estado`, `cal`, se `mao_d`/`mao_e` existem, e as razões `r_d/cal` etc. quando `cal` já existe. Ele **não imprime** `ab_d`, `ab_e`, `pose_cruzada(plm)` nem `progresso_cal` — ou seja, não dá pra ver pelo terminal, no momento exato da falha, qual das condições (`mao_d`, `mao_e`, `ab_d`, `ab_e`) não bateu. Isso deveria ser o primeiro passo antes de qualquer mudança de lógica.
+### Outras pastas em `firmware/`
+Ver `firmware/README.md`. Resumo: 3 utilitários oficiais (idênticos ao repositório), `teste_motores` (diagnóstico, feito aqui) e `bertos_controle` (**obsoleto**: reescrita com rampa/tempo morto, substituída pelo oficial a pedido do usuário; pinagem dele reflete a ligação errada antiga — não gravar).
 
-Primeiro passo sugerido: adicionar ao log de `DEBUG` os valores de `ab_d`, `ab_e`, `pose_cruzada(plm)` (quando `rp.pose_landmarks` existir) e `segurando_desde`/`progresso_cal`, pra ver exatamente qual condição falha no frame em que `restante <= 0`. Depois, considerar trocar a checagem de "um frame só" por algo mais tolerante — por exemplo, exigir mãos abertas por alguns frames seguidos antes do fim da contagem, ou dar uma folga extra (tipo mais 0.5s) se as mãos aparecerem abertas logo em seguida ao final da contagem, em vez de falhar de vez.
+---
 
-## Próximas fases
-1. Resolver a calibração por gesto (acima). Depois, revisitar a sensibilidade de profundidade (`PROF_DZ`/`PROF_ALCANCE`) — havia um relato anterior do usuário de que `acel` ficava sempre em 0 mesmo com a mão aberta e calibrada; não foi confirmado se já foi resolvido, os valores de `r_d/cal` do log de DEBUG ajudam a confirmar.
-2. Integrar `modo_mao.h` no firmware. Pedir o `.ino` e o `parametros.h` ao usuário se não estiverem na pasta.
-   - Chamar `iniciarModoMao()` no `setup()`, depois do Bluepad32. **Testar primeiro se o gamepad continua responsivo**, porque Wi-Fi e BT dividem o mesmo rádio do ESP32.
-   - O gamepad é o dono: um botão alterna o modo braço (sugestão: triângulo, `ctl->y()`, que está livre no mapeamento atual). Se o gamepad desconectar, o robô para. Com `lerModoMao() == false` (timeout), o robô para.
-   - Arma: sinal → sentido, módulo → PWM até `MAX_PWM`.
-   - **Aplicar rampa (soft-start) e tempo morto na inversão também nos motores da arma.** Histórico: partidas bruscas dos motores já derrubaram a alimentação e resetaram o rádio numa versão anterior do robô.
-3. Colocar `ENVIAR_UDP = True` e testar com o robô suspenso antes do chão.
+## Gestos (Python) — `controle_mao.py` + `sim_robo.py`
+Ambiente: `venv` com **Python 3.12** e `requirements.txt` (`mediapipe==0.10.14` — versões novas não têm `mp.solutions`, **não atualizar**). O Python global desta máquina (3.14) não roda o projeto.
 
-## Firmware atual (contexto)
-- ESP32 devkit 38 pinos num shield com 2× DRV8833. Sketch `.ino` + `parametros.h` (`MAX_PWM`, `MIN_PWM`, limites e tolerância do joystick).
-- 2 motores de locomoção (sentidoMotor/velocidadeMotor por lado) e 2 motores de arma (`PINO_1/2_ARMA1`, `PINO_1/2_ARMA2`).
-- Gamepad: START liga, SELECT desliga, L3+R3 trava/destrava as configurações, d-pad inverte o giro dos motores, R2 acelera, L2 dá ré, analógico esquerdo faz a direção, analógico direito define o sentido da arma.
+Mapeamento de gestos (definido pelo usuário — não mudar):
+- **Braço direito (locomoção):** mão aberta = anda, fechada/fora = para; mão pra frente (em direção à câmera) = acelera, pra trás = ré; mão pra direita/esquerda do ombro = curva.
+- **Braço esquerdo (arma):** mão aberta = ativa, fechada = para; frente/trás = sentido; ao sair da zona morta já entra em `ARMA_MIN = 70%`.
+
+Como está implementado:
+- Frame espelhado. **Cada mão é atribuída ao pulso do Pose mais próximo** (não usa o rótulo Left/Right do Hands, que às vezes rotula as duas iguais). Mãos a mais de `MAO_DIST_MAX = 0.8` larguras de ombro de qualquer pulso são ignoradas (gente atrás do operador) e aparecem cinza.
+- **Calibração: tecla `c`** → contagem de 5 s com o robô parado → salva a posição neutra; se faltar mão no fim, espera mais 2 s e diz o que faltou. (A calibração por gesto de X foi removida — não funcionava.)
+- Profundidade = tamanho da palma ÷ largura dos ombros; curva = x do pulso direito − ombro direito, em larguras de ombro. EMA `SUAVIZACAO = 0.4`.
+- Visual estilo HUD "Tony Stark" (pedido do usuário): sem esqueleto do corpo nem da mão; repulsor brilhando na palma (apagado = mão fechada), marcas nas pontas dos dedos, rótulos com os valores, anel grande de contagem na calibração, brilho neon, painel com canto cortado. O usuário pediu pra **tirar os anéis em volta das mãos** — não recolocar.
+- Teclas: `c` calibra, `r` reseta o simulador, `q` sai.
+- Protocolo UDP (quando ligado): 5 bytes `struct.pack("<BbbbB", 0xAA, acel, dire, arma, seq)`, valores −100..100, 30x/s, pra `192.168.4.1:4210`.
+
+Problemas conhecidos (não resolvidos):
+- **Ré quase inalcançável e aceleração máxima difícil:** o tamanho da palma varia com 1/distância; a ~2 m da câmera, 100% de ré exigiria recuar a mão ~1,6 m. Sugestão: usar `log(r/cal)` e diminuir `PROF_DZ`/`PROF_ALCANCE`.
+- Aberta/fechada sem histerese (pode piscar e dar trancos).
+- `sock.sendto` sem `try/except` (queda de Wi-Fi derruba o programa); `cap.isOpened()` não é checado.
+
+## `modo_mao.h` (lado ESP32, não integrado)
+softAP `RoboBatalha` / `12345678`, UDP 4210, pacote de 5 bytes começando com `0xAA`, zera o comando se ficar 300 ms sem pacote (`lerModoMao()` retorna `false`). Atenção: senha fraca e até 4 conexões — em evento aberto, qualquer celular na rede poderia mandar pacotes; considerar `WiFi.softAP(ssid, senha, 1, 0, 1)` e senha melhor.
+
+---
+
+## Próxima fase: integração (NÃO começar sem confirmação do usuário)
+Requisito do usuário: o robô é pilotado **pelo controle OU pelos gestos, um de cada vez**, e **o modo é escolhido no controle com R1 e L1** (qual botão é qual modo ainda não foi definido — perguntar).
+
+Pontos a resolver/decidir:
+1. **Controle continua sendo o "dono":** START/SELECT e o failsafe de desconexão valem nos dois modos; se o controle desconectar, o robô para mesmo no modo gestos.
+2. **Wi-Fi (softAP) + Bluetooth no mesmo rádio da ESP32:** testar primeiro se o controle continua responsivo com o Wi-Fi ligado. Não se sabe ainda.
+3. **No modo gestos:** converter `acel`/`dire` (−100..100) para `valorAnalogicoV`/`valorAnalogicoH` e reaproveitar a mistura oficial (frente = V negativo). Sem pacote UDP por 300 ms → motores parados.
+4. **Arma no modo gestos:** o gesto dá velocidade e sentido (−100..100); no controle é liga/desliga 100%. Decidir se o gesto controla a arma e com que limite; considerar partida suave (histórico de quedas de alimentação).
+5. **Python:** `ENVIAR_UDP = True`; o notebook precisa entrar na rede `RoboBatalha` (fica sem internet).
+6. Mudar o firmware oficial o mínimo possível e registrar as mudanças no topo do `.ino`.
+7. Testar sempre com o robô suspenso antes do chão.
 
 ## Regras de trabalho do usuário
-- Mudanças incrementais. Preservar o que já funciona e não refatorar amplamente.
-- Respostas diretas e técnicas, com passos acionáveis ("substitua X por Y", "crie a função Z em W").
-- Não inventar comportamento de lib ou hardware. Se não souber, dizer.
-- O usuário testa rodando `python controle_mao.py` ele mesmo (a IA não consegue testar a webcam/gestos por conta própria) e reporta o que vê na tela e no terminal.
+- Mudanças incrementais; preservar o que funciona; fiel ao repositório oficial.
+- Respostas diretas e técnicas, com passos acionáveis.
+- Não inventar comportamento de lib ou hardware; se não souber, dizer (e medir: `descobrir_parametros_controle`, testes no PC).
+- O usuário testa (webcam, robô) e reporta; **o usuário faz os commits** (Claude sugere a mensagem).

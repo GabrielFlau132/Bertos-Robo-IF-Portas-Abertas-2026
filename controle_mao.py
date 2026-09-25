@@ -10,9 +10,9 @@
 #   mão pra frente = gira num sentido | pra trás = gira no outro
 #   ao sair da zona morta já entra com ARMA_MIN % (gira rápido)
 #
-# Calibrar: cruze os braços em X (pulsos trocados de lado, acima do quadril) e
-# segure a posição neutra de mãos abertas quando a contagem de 3s terminar.
-# 'c' = calibra na hora (as duas mãos abertas, palma pra câmera) | 'q' = sair
+# Calibrar: aperte 'c' e fique na posição neutra com as duas mãos na câmera
+# até a contagem de 5s terminar (o robô fica parado enquanto conta).
+# 'c' = calibrar | 'r' = resetar simulador | 'q' = sair
 # UDP 30x/s: [0xAA, aceleracao(int8), direcao(int8), arma(int8, sinal = sentido), seq(uint8)]
 #
 # Profundidade = tamanho da palma na imagem / largura dos ombros.
@@ -44,18 +44,20 @@ CURVA_DZ = 0.15       # em larguras de ombro
 CURVA_ALCANCE = 0.7
 ARMA_MIN = 70         # % assim que sai da zona morta
 SUAVIZACAO = 0.4      # 0..1: maior = mais rápido e mais ruidoso
-CAL_AUTO_SEGUNDOS = 3.0    # depois do X com os bracos, conta esse tempo antes de exigir maos abertas
-CAL_JANELA_SEGUNDOS = 2.0  # depois da contagem, tolerancia p/ abrir as duas maos
-CAL_CONFIRMA_SEGUNDOS = 0.2  # maos precisam ficar abertas por esse tempo seguido p/ confirmar
+CAL_TIMER_SEGUNDOS = 5.0   # contagem depois de apertar 'c'
+CAL_JANELA_SEGUNDOS = 2.0  # depois da contagem, tolerancia p/ as duas maos aparecerem
+MAO_DIST_MAX = 0.8    # distancia max (em larguras de ombro) entre a mao e o pulso do Pose
 
 COR_HUD = (0, 30, 220)       # vermelho (BGR) - acentos do HUD
 COR_HUD_OURO = (0, 170, 255)  # dourado - detalhe secundario
+COR_NUCLEO = (210, 240, 255)  # branco quente (núcleo do repulsor, números)
+COR_MAO_D = COR_HUD_OURO      # mão direita (locomoção)
+COR_MAO_E = (40, 50, 255)     # mão esquerda (arma), vermelho mais vivo que o do HUD
+FONTE = cv2.FONT_HERSHEY_SIMPLEX
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 mp_hands = mp.solutions.hands
 mp_pose = mp.solutions.pose
-mp_draw = mp.solutions.drawing_utils
-POSE_SEM_ROSTO = [c for c in mp_pose.POSE_CONNECTIONS if c[0] > 10 and c[1] > 10]
 
 
 def dist(a, b, w, h):
@@ -89,10 +91,126 @@ def desenhar_alvo(frame, lm, w, h, cor, folga=16, tam=18):
            int(max(xs)) + folga, int(max(ys)) + folga, cor, tam)
 
 
-def pose_cruzada(plm):
-    """braços em X: pulsos trocados de lado e acima do quadril"""
-    return (plm[16].x < plm[11].x and plm[15].x > plm[12].x and
-            plm[15].y < plm[23].y and plm[16].y < plm[24].y)
+# ---------------------------------------------------------------- visual HUD
+# Tudo que brilha é desenhado numa camada preta separada ('hud'); brilho() soma
+# essa camada borrada (halo neon) + ela nítida por cima da imagem da câmera.
+
+def escurecer(cor, f):
+    return tuple(int(c * f) for c in cor)
+
+
+def texto(img, txt, org, escala, cor, esp=1, larg_max=None):
+    """putText suavizado; diminui a fonte se passar de larg_max px"""
+    if larg_max:
+        tw = cv2.getTextSize(txt, FONTE, escala, esp)[0][0]
+        if tw > larg_max:
+            escala *= larg_max / tw
+    cv2.putText(img, txt, org, FONTE, escala, cor, esp, cv2.LINE_AA)
+
+
+def texto_centro(img, txt, cx, cy, escala, cor, esp=2, larg_max=None):
+    if larg_max:
+        tw = cv2.getTextSize(txt, FONTE, escala, esp)[0][0]
+        if tw > larg_max:
+            escala *= larg_max / tw
+    (tw, th), _ = cv2.getTextSize(txt, FONTE, escala, esp)
+    cv2.putText(img, txt, (cx - tw // 2, cy + th // 2), FONTE, escala, cor, esp, cv2.LINE_AA)
+
+
+def estilo_camera(frame):
+    """escurece a câmera e põe linhas de varredura, pro HUD saltar da imagem"""
+    cv2.convertScaleAbs(frame, frame, alpha=0.72)
+    frame[::3] = frame[::3] // 4 * 3
+
+
+def brilho(frame, hud):
+    h, w = frame.shape[:2]
+    halo = cv2.resize(hud, (w // 2, h // 2))
+    halo = cv2.resize(cv2.GaussianBlur(halo, (0, 0), 5), (w, h))
+    frame = cv2.addWeighted(frame, 1.0, halo, 1.6, 0)
+    return cv2.add(frame, hud)
+
+
+def centro_palma(lm, w, h):
+    ids = (0, 5, 9, 13, 17)
+    return (int(sum(lm[i].x for i in ids) / 5 * w), int(sum(lm[i].y for i in ids) / 5 * h))
+
+
+def hud_mao(hud, lm, w, h, cor, ativa, t, linhas, lado):
+    """
+    HUD de armadura sobre a mão: núcleo de repulsor na palma (aceso = mão aberta),
+    marcas nas pontas dos dedos e rótulo puxado pro lado de fora (lado = +1/-1).
+    """
+    c = centro_palma(lm, w, h)
+    r = max(28, int(palma(lm, w, h) * 0.95))
+    fraca = escurecer(cor, 0.45)
+
+    for i in (4, 8, 12, 16, 20):  # só as pontas dos dedos, nada de esqueleto
+        p = (int(lm[i].x * w), int(lm[i].y * h))
+        cv2.line(hud, c, p, escurecer(cor, 0.25), 1, cv2.LINE_AA)
+        cv2.circle(hud, p, 5, cor, 1, cv2.LINE_AA)
+        cv2.circle(hud, p, 2, COR_NUCLEO, -1, cv2.LINE_AA)
+
+    if ativa:
+        pulsa = 0.85 + 0.15 * math.sin(t * 8)
+        cv2.circle(hud, c, int(r * 0.34 * pulsa), cor, -1, cv2.LINE_AA)
+        cv2.circle(hud, c, int(r * 0.17), COR_NUCLEO, -1, cv2.LINE_AA)
+    else:
+        cv2.circle(hud, c, int(r * 0.2), fraca, 1, cv2.LINE_AA)
+
+    rm = int(r * 1.1)  # onde a linha do rótulo começa, um pouco fora da mão
+    a = math.radians(-45 if lado > 0 else -135)
+    p0 = (int(c[0] + rm * math.cos(a)), int(c[1] + rm * math.sin(a)))
+    p1 = (p0[0] + lado * 26, max(p0[1] - 26, 26 + 20 * len(linhas)))  # rótulo não sai pelo topo
+    larg = 140
+    x_txt = max(4, min(w - larg - 4, p1[0] + 6 if lado > 0 else p1[0] - larg))
+    p2 = (x_txt + larg if lado > 0 else x_txt, p1[1])
+    cv2.circle(hud, p0, 3, cor, -1, cv2.LINE_AA)
+    cv2.line(hud, p0, p1, cor, 1, cv2.LINE_AA)
+    cv2.line(hud, p1, p2, cor, 1, cv2.LINE_AA)
+    for i, txt in enumerate(linhas):
+        y = p1[1] - 8 - (len(linhas) - 1 - i) * 20
+        if i == 0:
+            texto(hud, txt, (x_txt, y), 0.45, cor, 1)
+        else:
+            texto(hud, txt, (x_txt, y), 0.55, COR_NUCLEO, 1, larg_max=larg)
+
+
+def hud_contagem(hud, cx, cy, t, restante, total):
+    """anel grande no meio da tela; restante=None = contagem acabou, esperando as mãos"""
+    r = 70
+    cv2.circle(hud, (cx, cy), r, escurecer(COR_HUD, 0.5), 2, cv2.LINE_AA)
+    if restante is not None:
+        cv2.ellipse(hud, (cx, cy), (r, r), -90, 0, 360 * (1 - restante / total),
+                    COR_HUD_OURO, 6, cv2.LINE_AA)
+        texto_centro(hud, str(math.ceil(restante)), cx, cy, 2.2, COR_NUCLEO, 4)
+        rotulo = "CALIBRANDO - FIQUE NA POSICAO NEUTRA"
+    else:
+        if int(t * 4) % 2:
+            cv2.circle(hud, (cx, cy), r, COR_HUD, 6, cv2.LINE_AA)
+        texto_centro(hud, "?", cx, cy, 2.2, COR_NUCLEO, 4)
+        rotulo = "MOSTRE AS DUAS MAOS"
+    ang = (t * 120) % 360
+    for k in range(4):
+        cv2.ellipse(hud, (cx, cy), (r + 14, r + 14), -ang + k * 90, 0, 40, COR_HUD, 2, cv2.LINE_AA)
+        cv2.ellipse(hud, (cx, cy), (r + 24, r + 24), ang + k * 90 + 45, 0, 15, COR_HUD_OURO, 1, cv2.LINE_AA)
+    texto_centro(hud, rotulo, cx, cy + r + 44, 0.6, COR_HUD_OURO, 2, larg_max=2 * cx - 40)
+
+
+def painel_status(frame, estado, linhas, larg=440):
+    """painel escuro com canto cortado; linhas = [(texto, cor), ...]"""
+    alt = 62 + 24 * len(linhas)
+    roi = frame[:alt + 1, :larg + 1]
+    pts = np.array([(0, 0), (larg, 0), (larg, alt - 20), (larg - 20, alt), (0, alt)], np.int32)
+    fundo = roi.copy()
+    cv2.fillPoly(fundo, [pts], (14, 8, 8))
+    cv2.addWeighted(fundo, 0.65, roi, 0.35, 0, roi)
+    cv2.polylines(frame, [pts[1:]], False, COR_HUD, 1, cv2.LINE_AA)
+    cv2.line(frame, (0, 1), (130, 1), COR_HUD_OURO, 3)
+    texto(frame, "BERTOS  //  CONTROLE POR GESTOS", (12, 20), 0.42, COR_HUD, 1)
+    texto(frame, estado, (12, 46), 0.6, COR_HUD_OURO, 2, larg_max=larg - 24)
+    for i, (txt, cor) in enumerate(linhas):
+        texto(frame, txt, (12, 72 + 24 * i), 0.5, cor, 1, larg_max=larg - 24)
 
 
 def escala(d, dz, alcance):
@@ -110,11 +228,8 @@ def enviar(acel, dire, arma, seq):
 
 def main():
     cal = None
-    fase = "ociosa"  # ociosa | contando | aguardando
-    segurando_desde = None
-    aguardando_ate = None
-    abertas_desde = None
-    cruzado_antes = False
+    fase = "ociosa"  # ociosa | contando
+    contando_desde = None
     cal_msg, cal_msg_ate = "", 0.0
     suav = {"r_dir": None, "x_dir": None, "r_arma": None}
 
@@ -153,38 +268,44 @@ def main():
             r_d = x_d = r_e = None
             largura = 0
             progresso_cal = None
-            cruzado = None
+            contagem = None
+            maos_ignoradas = 0
+            desenhos = []  # (landmarks, "d" | "e" | None) — desenhados no fim, já com os valores
 
             if rp.pose_landmarks:
                 plm = rp.pose_landmarks.landmark
-                for a, b in POSE_SEM_ROSTO:
-                    pa, pb = plm[a], plm[b]
-                    cv2.line(frame, (int(pa.x * w), int(pa.y * h)), (int(pb.x * w), int(pb.y * h)),
-                              COR_HUD, 2)
-                for i in range(11, 33):
-                    p = plm[i]
-                    cv2.circle(frame, (int(p.x * w), int(p.y * h)), 3, COR_HUD_OURO, -1)
-
                 oe, od = sorted([plm[11], plm[12]], key=lambda p: p.x)
                 largura = abs(od.x - oe.x) * w
-                meio = (oe.x + od.x) / 2
+                # o pulso acompanha o ombro do mesmo lado no Pose (16 com 12, 15 com 11),
+                # então continua certo mesmo com os braços cruzados.
+                if plm[12].x > plm[11].x:
+                    pulso_d, pulso_e = plm[16], plm[15]
+                else:
+                    pulso_d, pulso_e = plm[15], plm[16]
 
-                # identidade da mão pelo rótulo Left/Right do MediaPipe (funciona com os
-                # braços cruzados; a posição em relação a 'meio' era só um fallback).
-                handedness = rh.multi_handedness or []
-                for i, m in enumerate(rh.multi_hand_landmarks or []):
-                    label = handedness[i].classification[0].label if i < len(handedness) else None
-                    if label is None:
-                        label = "Right" if m.landmark[0].x > meio else "Left"
-                    cor = (80, 255, 120) if label == "Right" else (255, 80, 220)
-                    mp_draw.draw_landmarks(
-                        frame, m, mp_hands.HAND_CONNECTIONS,
-                        mp_draw.DrawingSpec(color=cor, thickness=2, circle_radius=3),
-                        mp_draw.DrawingSpec(color=cor, thickness=2))
-                    desenhar_alvo(frame, m.landmark, w, h, cor)
-                    if label == "Right":
+                # identidade da mão = pulso do Pose mais próximo. Não usa o rótulo Left/Right
+                # do Hands (às vezes rotula as duas mãos iguais e uma some) e ignora mãos
+                # longe dos pulsos do corpo detectado (gente atrás do operador).
+                maos = rh.multi_hand_landmarks or []
+                pares = []
+                if largura > 20:
+                    for i, m in enumerate(maos):
+                        for lado, pulso in (("d", pulso_d), ("e", pulso_e)):
+                            d = dist(m.landmark[0], pulso, w, h) / largura
+                            if d < MAO_DIST_MAX:
+                                pares.append((d, i, lado))
+                dono = {}
+                for d, i, lado in sorted(pares):
+                    if i not in dono and lado not in dono.values():
+                        dono[i] = lado
+                maos_ignoradas = len(maos) - len(dono)
+
+                for i, m in enumerate(maos):
+                    lado = dono.get(i)
+                    desenhos.append((m.landmark, lado))
+                    if lado == "d":
                         mao_d = m.landmark
-                    else:
+                    elif lado == "e":
                         mao_e = m.landmark
 
                 if largura > 20:
@@ -202,55 +323,11 @@ def main():
                     else:
                         suav["r_arma"] = None
 
-                    # o X é checado sempre (mesmo já calibrado, pra dar pra recalibrar), mas só
-                    # dispara numa borda de subida (False->True) — sem isso, se a calibração
-                    # falhasse com os braços ainda cruzados, a contagem reiniciava na hora,
-                    # dando a impressão de "fica tentando e não consegue" (loop instantâneo).
-                    cruzado = pose_cruzada(plm)
-                    if fase == "ociosa" and cruzado and not cruzado_antes:
-                        fase = "contando"
-                        segurando_desde = agora
-                    cruzado_antes = cruzado
-
-                    # Enquanto fase != "ociosa", acel/dire/arma ficam em 0 (o robô para)
-                    # porque só o branch de baixo ("ociosa" com cal definido) os altera.
-                    if fase == "contando":
-                        restante = CAL_AUTO_SEGUNDOS - (agora - segurando_desde)
-                        progresso_cal = max(0.0, min(1.0, 1 - restante / CAL_AUTO_SEGUNDOS))
-                        if restante <= 0:
-                            # não exige mais mãos abertas neste frame exato: abre uma janela
-                            # de tolerância, porque descruzar os braços e abrir as mãos leva
-                            # um instante e raramente cai certinho no frame da virada dos 3s.
-                            fase = "aguardando"
-                            aguardando_ate = agora + CAL_JANELA_SEGUNDOS
-                            abertas_desde = None
-                        else:
-                            estado = f"X DETECTADO — PARADO, CALIBRANDO EM {restante:.1f}s"
-
-                    if fase == "aguardando":
-                        ambas_abertas = bool(mao_d and mao_e and ab_d and ab_e)
-                        if ambas_abertas:
-                            if abertas_desde is None:
-                                abertas_desde = agora
-                            elif agora - abertas_desde >= CAL_CONFIRMA_SEGUNDOS:
-                                cal = {"r_dir": r_d, "x_dir": x_d, "r_arma": r_e}
-                                cal_msg, cal_msg_ate = "CALIBRADO!", agora + 1.5
-                                fase = "ociosa"
-                        else:
-                            abertas_desde = None
-
-                        if fase == "aguardando":
-                            if agora >= aguardando_ate:
-                                cal_msg = "CALIBRACAO FALHOU: abra as duas maos"
-                                cal_msg_ate = agora + 1.5
-                                fase = "ociosa"
-                            else:
-                                progresso_cal = max(0.0, min(1.0, 1 - (aguardando_ate - agora) / CAL_JANELA_SEGUNDOS))
-                                estado = f"ABRA AS DUAS MAOS PRA CALIBRAR ({aguardando_ate - agora:.1f}s)"
-
+                    # Enquanto fase == "contando", acel/dire/arma ficam em 0 (o robô para)
+                    # porque só o branch de baixo os altera.
                     if fase == "ociosa":
                         if cal is None:
-                            estado = "FACA UM X COM OS BRACOS PRA CALIBRAR (ou aperte C)"
+                            estado = "APERTE C PRA CALIBRAR"
                         else:
                             estado = "ATIVO"
                             if mao_d and ab_d:
@@ -263,27 +340,46 @@ def main():
                 else:
                     estado = "CORPO LONGE DEMAIS (ombros pequenos)"
 
+            # 'c' (re)inicia a contagem; apertar de novo durante a contagem recomeça do zero
             if tecla == ord("c"):
-                if not rp.pose_landmarks or largura <= 20:
-                    cal_msg, cal_msg_ate = "C RECUSADO: corpo nao detectado direito", agora + 1.5
-                elif not mao_d or not mao_e:
-                    falta = []
-                    if not mao_d:
-                        falta.append("direita")
-                    if not mao_e:
-                        falta.append("esquerda")
-                    cal_msg, cal_msg_ate = f"C RECUSADO: falta mao {' e '.join(falta)}", agora + 1.5
-                else:
+                fase = "contando"
+                contando_desde = agora
+
+            if fase == "contando":
+                acel = dire = arma = 0  # garante robô parado já no frame em que 'c' foi apertado
+                restante = CAL_TIMER_SEGUNDOS - (agora - contando_desde)
+                if restante > 0:
+                    progresso_cal = 1 - restante / CAL_TIMER_SEGUNDOS
+                    contagem = restante
+                    estado = f"PARADO - CALIBRANDO EM {restante:.1f}s"
+                elif r_d is not None and r_e is not None:
+                    # r_d/r_e só existem com corpo detectado e as duas mãos atribuídas
                     cal = {"r_dir": r_d, "x_dir": x_d, "r_arma": r_e}
                     cal_msg, cal_msg_ate = "CALIBRADO!", agora + 1.5
                     fase = "ociosa"
+                elif restante <= -CAL_JANELA_SEGUNDOS:
+                    # passou a folga e ainda falta mão/corpo: desiste e diz o que faltou
+                    falta = []
+                    if not rp.pose_landmarks or largura <= 20:
+                        falta.append("corpo")
+                    if not mao_d:
+                        falta.append("mao direita")
+                    if not mao_e:
+                        falta.append("mao esquerda")
+                    cal_msg, cal_msg_ate = f"CALIBRACAO FALHOU: falta {' e '.join(falta)}", agora + 2.5
+                    fase = "ociosa"
+                else:
+                    # contagem acabou mas falta mão neste frame: espera um pouco em vez de
+                    # falhar de primeira (uma mão some por 1 frame com frequência)
+                    progresso_cal = 1.0
+                    estado = "MOSTRE AS DUAS MAOS PRA CAMERA"
 
             if DEBUG and agora - ultimo_log > 0.3:
                 info = (f"fase={fase} cal={'ok' if cal else 'None'} "
                         f"mao_d={'sim' if mao_d else 'nao'} ab_d={ab_d} "
                         f"mao_e={'sim' if mao_e else 'nao'} ab_e={ab_e} "
-                        f"cruzado={cruzado} "
-                        f"progresso_cal={progresso_cal}")
+                        f"progresso_cal={progresso_cal} "
+                        f"maos_ignoradas={maos_ignoradas}")
                 if cal and mao_d:
                     info += f" r_d/cal={r_d / cal['r_dir']:.2f} x_d-cal={x_d - cal['x_dir']:.2f}"
                 if cal and mao_e:
@@ -296,27 +392,40 @@ def main():
                 seq += 1
                 ultimo = agora
 
-            painel_h = 112 if progresso_cal is None else 128
-            overlay = frame.copy()
-            cv2.rectangle(overlay, (0, 0), (420, painel_h), (10, 10, 10), -1)
-            frame = cv2.addWeighted(overlay, 0.45, frame, 0.55, 0)
-            cv2.line(frame, (0, painel_h), (420, painel_h), COR_HUD, 1)
-
-            cv2.putText(frame, estado, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, COR_HUD_OURO, 2)
-            cv2.putText(frame, f"D:{txt_d} acel={acel} dir={dire}", (10, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (80, 255, 120), 2)
-            cv2.putText(frame, f"E:{txt_e} arma={arma}", (10, 90),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 80, 220), 2)
-            if progresso_cal is not None:
-                cv2.rectangle(frame, (10, 105), (410, 118), (80, 80, 80), 1)
-                cv2.rectangle(frame, (10, 105), (10 + int(400 * progresso_cal), 118), COR_HUD, -1)
-            cv2.putText(frame, "c = calibrar | q = sair", (10, h - 15),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            # ---- visual: câmera escurecida + camada HUD com brilho neon ----
+            estilo_camera(frame)
+            hud = np.zeros_like(frame)
+            for lm, lado in desenhos:
+                if lado == "d":
+                    linhas = (["LOCOMOCAO", f"ACEL {acel:+4d}", f"CURVA {dire:+4d}"] if ab_d
+                              else ["LOCOMOCAO", "TRAVADO"])
+                    hud_mao(hud, lm, w, h, COR_MAO_D, ab_d, agora, linhas, +1)
+                elif lado == "e":
+                    sentido = "HORARIO" if arma > 0 else "ANTI-HOR" if arma < 0 else "PARADA"
+                    linhas = ["ARMA", f"{arma:+4d} {sentido}"] if ab_e else ["ARMA", "TRAVADA"]
+                    hud_mao(hud, lm, w, h, COR_MAO_E, ab_e, agora, linhas, -1)
+                else:  # mão de outra pessoa / longe do pulso: só um retículo apagado
+                    desenhar_alvo(hud, lm, w, h, (70, 70, 70), tam=10)
+            if fase == "contando":
+                hud_contagem(hud, w // 2, h // 2, agora, contagem, CAL_TIMER_SEGUNDOS)
             if agora < cal_msg_ate:
-                cor = (0, 255, 0) if cal_msg == "CALIBRADO!" else (0, 0, 255)
-                cv2.putText(frame, cal_msg, (10, h - 45),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, cor, 2)
-            cantos(frame, 4, 4, w - 4, h - 4, COR_HUD, tam=30, esp=2)
+                if cal_msg == "CALIBRADO!":
+                    texto_centro(hud, "CALIBRADO", w // 2, h - 70, 1.3, COR_HUD_OURO, 3)
+                else:
+                    texto_centro(hud, cal_msg, w // 2, h - 70, 0.8, COR_MAO_E, 2, larg_max=w - 40)
+            cantos(hud, 4, 4, w - 4, h - 4, COR_HUD, tam=30, esp=2)
+            frame = brilho(frame, hud)
+
+            painel_status(frame, estado, [
+                (f"LOCOMOCAO  {txt_d:<8} ACEL {acel:+4d}   CURVA {dire:+4d}", COR_MAO_D),
+                (f"ARMA       {txt_e:<8} {arma:+4d}", COR_MAO_E),
+            ])
+            texto(frame, "C = CALIBRAR   R = RESETAR SIM   Q = SAIR", (12, h - 14), 0.42,
+                  escurecer(COR_HUD_OURO, 0.8))
+            online = int(agora * 2) % 2 == 0
+            cv2.circle(frame, (w - 150, h - 19), 4, COR_HUD if online else escurecer(COR_HUD, 0.4), -1, cv2.LINE_AA)
+            texto(frame, f"UDP {'ON ' if ENVIAR_UDP else 'OFF'} | SIM {'ON' if SIMULAR else 'OFF'}",
+                  (w - 140, h - 14), 0.42, escurecer(COR_HUD_OURO, 0.8))
             if SIMULAR:
                 if tecla == ord("r"):
                     sim.reset()

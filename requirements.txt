@@ -1,0 +1,4 @@
+# Python 3.12 (mediapipe 0.10.14 não tem wheel pra versões mais novas)
+mediapipe==0.10.14   # versões novas não têm mp.solutions: NÃO atualizar
+opencv-python==4.11.0.86
+numpy==1.26.4        # mediapipe 0.10.14 foi compilado contra numpy 1.x
