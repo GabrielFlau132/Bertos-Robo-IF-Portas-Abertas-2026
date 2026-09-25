@@ -1,6 +1,6 @@
 # Handoff — Robô Bertos (IF Portas Abertas 2026)
 
-Estado em **2026-09-24**. Leia inteiro antes de mexer em qualquer coisa.
+Estado em **2026-09-25** (véspera da apresentação). Histórico e decisões detalhadas. O guia operacional rápido para a IA é o **`CLAUDE.md`**, e o roteiro do dia é o **`APRESENTACAO.md`**.
 
 ## Objetivo
 Robô de batalha (categoria cupim) pilotado de **dois jeitos, um de cada vez**, escolhidos no controle:
@@ -16,9 +16,10 @@ Robô de batalha (categoria cupim) pilotado de **dois jeitos, um de cada vez**, 
 | Integração controle + gestos (R1/L1) | ✅ **testada no robô pelo usuário em 2026-09-24: "funcionando lindamente"** |
 | Wi-Fi + Bluetooth juntos na ESP32 | ✅ sem problema (controle responsivo com a rede ligada) |
 | Limite de velocidade | ✅ testado e aprovado pelo usuário (valores em `parametros.h`) |
-| Direção por gestos (difícil andar reto) | ✅ corrigido no firmware (mistura própria) e no Python (zona morta + curva suave) · ⏳ **firmware ainda não gravado**, usuário não testou |
+| Direção por gestos (difícil andar reto) | ✅ Python (zona morta + curva suave) aprovado · ⚠️ **correção do firmware (mistura própria) ainda NÃO gravada na ESP32** — gravar com `scripts\gravar_firmware.ps1` |
 | Barra de calibração simples (no lugar do anel animado) | ✅ aprovada ("tá incrível") |
-| Paleta roxo + verde (no lugar de vermelho/amarelo) | ✅ feita · ⏳ usuário não viu na câmera real |
+| Paleta roxo + verde (no lugar de vermelho/amarelo) | ✅ aprovada ("perfeito") |
+| Preparação pra apresentação | ✅ `CLAUDE.md`, `APRESENTACAO.md`, scripts (`scripts/`, `rodar_gestos.bat`), testes no repositório (`tests/`), `requirements-lock.txt`, `CAMERA` configurável e aviso se a câmera não abrir |
 
 ---
 
@@ -96,7 +97,7 @@ Código oficial com estas mudanças (listadas no topo do `.ino`):
 
 Tamanho com Wi-Fi + Bluetooth: 1,12 MB (85% da partição de app padrão).
 
-Testes no PC (bibliotecas Arduino/Bluepad32/WiFi falsas, no scratchpad da sessão): 35 checagens da integração (troca de modo, gestos = mesmos padrões de motor do controle, arma, timeout de 300 ms, LED, SELECT, desconexão) + comparação com o oficial no modo controle (idêntico, fora 1 ponto de PWM de arredondamento). `controle_mao.py` rodado com câmera falsa mandando pra um receptor local: pacotes de 5 bytes corretos, zero durante a calibração, valores iguais aos do HUD.
+Testes no PC (bibliotecas Arduino/Bluepad32/WiFi falsas, hoje em `tests/firmware/`; rodar tudo com `tests\rodar_testes.ps1`): 35 checagens da integração (troca de modo, gestos = mesmos padrões de motor do controle, arma, timeout de 300 ms, LED, SELECT, desconexão) + comparação com o oficial no modo controle (idêntico, fora 1 ponto de PWM de arredondamento). `controle_mao.py` rodado com câmera falsa mandando pra um receptor local: pacotes de 5 bytes corretos, zero durante a calibração, valores iguais aos do HUD.
 
 Comportamentos do código oficial que continuam (não foram "consertados" de propósito, pra manter fidelidade):
 - A arma vai de 0 a 100% instantaneamente (sem partida suave). Histórico do usuário: partidas bruscas já derrubaram a alimentação e resetaram o rádio numa versão anterior.
@@ -139,7 +140,7 @@ Como está implementado:
 Problemas conhecidos (não resolvidos):
 - **Ré quase inalcançável e aceleração máxima difícil:** o tamanho da palma varia com 1/distância; a ~2 m da câmera, 100% de ré exigiria recuar a mão ~1,6 m. Sugestão: usar `log(r/cal)` e diminuir `PROF_DZ`/`PROF_ALCANCE`.
 - Aberta/fechada sem histerese (pode piscar e dar trancos).
-- `cap.isOpened()` não é checado.
+- ~~`cap.isOpened()` não é checado~~ — resolvido: `CAMERA` configurável no topo e mensagem clara se a câmera não abrir ou cair.
 - Mandar pra `192.168.4.1` estando em outra rede Wi-Fi normalmente **não dá erro** (o pacote só se perde): "ROBO ON" no rodapé não garante que o robô está recebendo — o LED azul da ESP32 piscando rápido é que confirma.
 
 ## `modo_mao.h` (lado ESP32, em `firmware/codigo_robo_controle_p3/`)

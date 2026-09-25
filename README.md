@@ -9,16 +9,38 @@ Os dois modos foram testados no robô e funcionam.
 
 Hardware e firmware base: [nrc-cupim/start-automacao-eletrica](https://github.com/nrc-cupim/start-automacao-eletrica) (placa START_AUTOMACAO_ELETRICA: ESP32 DevKit v1 + 2× DRV8833).
 
-O estado detalhado, as decisões e os próximos passos estão no [HANDOFF.md](HANDOFF.md).
+Documentos:
+- [APRESENTACAO.md](APRESENTACAO.md): checklist do dia e diagnóstico rápido de problemas.
+- [CLAUDE.md](CLAUDE.md): guia operacional (ambiente, ajustes, armadilhas).
+- [HANDOFF.md](HANDOFF.md): histórico e decisões.
+
+## Início rápido (Windows)
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts\preparar_ambiente.ps1 -Arduino
+```
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts\gravar_firmware.ps1
+```
+
+Depois abra os gestos com duplo clique no **`rodar_gestos.bat`**.
+
+- O `preparar_ambiente.ps1` cria ou confere o venv com Python 3.12 e as bibliotecas, testa a webcam e, com `-Arduino`, também o arduino-cli, o core da ESP32 e o driver.
+- O `gravar_firmware.ps1` compila, acha a porta da ESP32 e grava.
+- Para rodar todos os testes (sem robô e sem webcam): `powershell -ExecutionPolicy Bypass -File tests\rodar_testes.ps1`.
 
 ## Estrutura
 
 | Caminho | O que é |
 |---|---|
-| `firmware/codigo_robo_controle_p3/` | **Firmware do robô**: código oficial + R2/L2 e analógico direito, sentido padrão das rodas e modo gestos (R1/L1). O `modo_mao.h` (Wi-Fi + UDP) fica aqui |
+| `firmware/codigo_robo_controle_p3/` | **Firmware do robô**: código oficial + R2/L2 e analógico direito, sentido padrão das rodas, modo gestos (R1/L1) e limites de velocidade. O `modo_mao.h` (Wi-Fi + UDP) fica aqui |
 | `firmware/` (outras pastas) | Utilitários oficiais, diagnóstico e uma versão obsoleta. Veja o [firmware/README.md](firmware/README.md) |
-| `controle_mao.py` | Controle por gestos: webcam → MediaPipe Hands + Pose → aceleração, direção e arma → simulador + UDP para o robô |
+| `controle_mao.py` | Controle por gestos: webcam → MediaPipe Hands + Pose → aceleração, direção e arma → simulador + UDP para o robô. Os ajustes ficam em constantes no topo |
 | `sim_robo.py` | Robô virtual visto de cima, desenhado ao lado da câmera |
+| `scripts/`, `rodar_gestos.bat` | Preparar o ambiente, gravar o firmware, abrir os gestos |
+| `tests/` | Testes sem hardware: firmware no PC com bibliotecas falsas, Python com câmera falsa, imagens do HUD |
+| `requirements.txt` / `requirements-lock.txt` | Dependências diretas / versões exatas de todas |
 
 ## Pilotar
 
@@ -78,8 +100,10 @@ Precisa de **Python 3.12**. O `mediapipe==0.10.14` não instala em versões mais
 ```
 
 ```bash
-.\venv\Scripts\python.exe -m pip install -r requirements.txt
+.\venv\Scripts\python.exe -m pip install -r requirements-lock.txt
 ```
+
+O `scripts\preparar_ambiente.ps1` faz esses dois passos sozinho.
 
 ```bash
 .\venv\Scripts\python.exe controle_mao.py

@@ -36,6 +36,7 @@ SIMULAR = True      # mostra o robô virtual ao lado da câmera
 ENVIAR_UDP = True   # manda os comandos pro robô: notebook na rede Wi-Fi RoboBatalha e
                     # robô no modo gestos (R1 no controle; L1 volta pro controle)
 DEBUG = True         # imprime diagnóstico da calibração/estado no terminal
+CAMERA = 0           # índice da webcam (0 = padrão; troque pra 1, 2... se abrir a câmera errada)
 
 IP_ROBO = "192.168.4.1"
 PORTA = 4210
@@ -283,7 +284,11 @@ def main():
         return suav[k]
 
     sim = SimRobo()
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(CAMERA)
+    if not cap.isOpened():
+        print(f"ERRO: nao consegui abrir a camera {CAMERA}. Confira se a webcam esta ligada e "
+              f"nao esta aberta em outro programa, ou mude CAMERA no topo do controle_mao.py.")
+        return
     seq = 0
     ultimo = 0.0
     ultimo_log = 0.0
@@ -296,6 +301,7 @@ def main():
         while True:
             ok, frame = cap.read()
             if not ok:
+                print("ERRO: a camera parou de mandar imagem (desconectada?). Encerrando.")
                 break
             frame = cv2.flip(frame, 1)  # espelho: lado da tela = lado do corpo
             h, w = frame.shape[:2]
