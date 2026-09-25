@@ -1,9 +1,11 @@
 # Bertos — Robô IF Portas Abertas 2026
 
-Robô de batalha (categoria cupim) que pode ser pilotado de dois jeitos:
+Robô de batalha (categoria cupim) que pode ser pilotado de dois jeitos, um de cada vez. A escolha é feita no controle:
 
-- **Controle de PS3**: funcionando no robô.
-- **Gestos dos braços** reconhecidos por webcam (Python + MediaPipe): funcionando no simulador, ainda não ligado ao robô.
+- **L1 — controle de PS3**.
+- **R1 — gestos dos braços** reconhecidos por webcam (Python + MediaPipe, enviados por Wi-Fi).
+
+Os dois modos foram testados no robô e funcionam.
 
 Hardware e firmware base: [nrc-cupim/start-automacao-eletrica](https://github.com/nrc-cupim/start-automacao-eletrica) (placa START_AUTOMACAO_ELETRICA: ESP32 DevKit v1 + 2× DRV8833).
 
@@ -13,22 +15,33 @@ O estado detalhado, as decisões e os próximos passos estão no [HANDOFF.md](HA
 
 | Caminho | O que é |
 |---|---|
-| `firmware/codigo_robo_controle_p3/` | **Firmware em uso no robô**: código oficial com 2 mudanças (R2/L2 + analógico direito; sentido padrão das rodas) |
+| `firmware/codigo_robo_controle_p3/` | **Firmware do robô**: código oficial + R2/L2 e analógico direito, sentido padrão das rodas e modo gestos (R1/L1). O `modo_mao.h` (Wi-Fi + UDP) fica aqui |
 | `firmware/` (outras pastas) | Utilitários oficiais, diagnóstico e uma versão obsoleta. Veja o [firmware/README.md](firmware/README.md) |
-| `controle_mao.py` | Controle por gestos: webcam → MediaPipe Hands + Pose → aceleração, direção e arma → simulador e/ou UDP |
+| `controle_mao.py` | Controle por gestos: webcam → MediaPipe Hands + Pose → aceleração, direção e arma → simulador + UDP para o robô |
 | `sim_robo.py` | Robô virtual visto de cima, desenhado ao lado da câmera |
-| `modo_mao.h` | Lado ESP32 do modo gestos (Wi-Fi softAP + UDP). **Ainda não integrado** |
 
-## Pilotar com o controle
+## Pilotar
 
 | Comando | Função |
 |---|---|
-| START / SELECT | liga / desliga o robô |
-| R2 / L2 | frente / trás |
-| Analógico direito ↔ | direção (sem gatilho, gira no lugar) |
-| O / □ / △ | arma num sentido / no outro / desliga |
-| Setas | sentido das rodas (padrão = seta ↓) |
+| START / SELECT | liga / desliga o robô (SELECT para tudo na hora) |
+| **L1 / R1** | **modo controle / modo gestos** (trocar de modo para todos os motores) |
+| R2 / L2 | frente / trás *(modo controle)* |
+| Analógico direito ↔ | direção; sem gatilho, gira no lugar *(modo controle)* |
+| O / □ / △ | arma num sentido / no outro / desliga *(modo controle)* |
+| Setas | sentido das rodas (padrão = seta ↓) *(os dois modos)* |
 | L3 + R3 | trava as setas (LED azul da ESP32 aceso) |
+
+**Velocidade:** a locomoção é limitada em cada modo:
+- **modo controle:** frente/ré 80% e giro 60%;
+- **modo gestos:** frente/ré 60% e giro 40%.
+
+Para ajustar, mude os `LIMITE_*` em `firmware/codigo_robo_controle_p3/parametros.h` (100 = sem limite) e grave de novo. A arma não é limitada.
+
+O robô sempre liga no modo controle. No **modo gestos**:
+- O LED azul da ESP32 **pisca devagar** enquanto não chegam comandos do PC e **pisca rápido** quando está recebendo.
+- Se o PC parar de mandar comandos por 300 ms, o robô para.
+- Se o controle desconectar, o robô desliga, em qualquer modo.
 
 **Parear o controle:**
 1. Grave o `firmware/descobrir_parametros_controle`.
@@ -78,9 +91,16 @@ Gestos:
 - **Mão direita:** aberta anda. Levar a mão para frente ou para trás acelera ou dá ré, e para os lados faz a curva.
 - **Mão esquerda:** aberta liga a arma. Levar a mão para frente ou para trás escolhe o sentido.
 
-Hoje o programa só mostra o resultado no simulador (`ENVIAR_UDP = False`).
+**Pilotar o robô por gestos:**
+1. Ligue o robô e o controle. Conecte o notebook na rede Wi-Fi **RoboBatalha** (senha `12345678`). O notebook fica sem internet enquanto estiver nela, e a rede aceita um aparelho só.
+2. Rode o `controle_mao.py` e calibre com `c`.
+3. No controle, aperte **START** e depois **R1**. O LED azul da ESP32 deve piscar rápido.
+4. **L1** devolve a pilotagem ao controle. **SELECT** desliga tudo.
+
+O rodapé da tela mostra `ROBO ON` quando está enviando e `ROBO SEM REDE`, em vermelho, se o envio falhar. Estando em outra rede Wi-Fi, o envio pode não dar erro: quem confirma que o robô está recebendo é o LED piscando rápido.
 
 ## Segurança
 - Teste sempre com o robô **suspenso** (rodas sem tocar no chão) antes de ir para o chão.
 - A arma liga a 100% na hora: mantenha as mãos longe.
-- O robô para se o controle desconectar.
+- O robô para se o controle desconectar (nos dois modos) e se o PC parar de mandar comandos no modo gestos.
+- A senha da rede `RoboBatalha` é fraca. Troque-a no `firmware/codigo_robo_controle_p3/modo_mao.h` antes de um evento aberto.

@@ -14,6 +14,8 @@
 # até a contagem de 5s terminar (o robô fica parado enquanto conta).
 # 'c' = calibrar | 'r' = resetar simulador | 'q' = sair
 # UDP 30x/s: [0xAA, aceleracao(int8), direcao(int8), arma(int8, sinal = sentido), seq(uint8)]
+# para 192.168.4.1:4210 (rede Wi-Fi RoboBatalha criada pela ESP32). O robô só obedece
+# no modo gestos (R1 no controle) e para sozinho se ficar 300 ms sem pacote.
 #
 # Profundidade = tamanho da palma na imagem / largura dos ombros.
 # Mão perto da câmera -> palma maior. Dividir pelos ombros anula o efeito
@@ -31,7 +33,8 @@ import numpy as np
 from sim_robo import SimRobo
 
 SIMULAR = True      # mostra o robô virtual ao lado da câmera
-ENVIAR_UDP = False  # True quando o ESP32 estiver ligado e o notebook na rede RoboBatalha
+ENVIAR_UDP = True   # manda os comandos pro robô: notebook na rede Wi-Fi RoboBatalha e
+                    # robô no modo gestos (R1 no controle; L1 volta pro controle)
 DEBUG = True         # imprime diagnóstico da calibração/estado no terminal
 
 IP_ROBO = "192.168.4.1"
@@ -220,10 +223,22 @@ def escala(d, dz, alcance):
     return math.copysign(min(1.0, (abs(d) - dz) / (alcance - dz)), d)
 
 
+udp_ok = True  # False enquanto o envio estiver falhando (fora da rede RoboBatalha)
+
+
 def enviar(acel, dire, arma, seq):
+    """manda o comando pro robô; se a rede cair, avisa e continua (o robô para sozinho
+    depois de 300 ms sem pacote)"""
+    global udp_ok
     if not ENVIAR_UDP:
         return
-    sock.sendto(struct.pack("<BbbbB", 0xAA, acel, dire, arma, seq & 0xFF), (IP_ROBO, PORTA))
+    try:
+        sock.sendto(struct.pack("<BbbbB", 0xAA, acel, dire, arma, seq & 0xFF), (IP_ROBO, PORTA))
+        udp_ok = True
+    except OSError as e:
+        if udp_ok:
+            print(f"AVISO: nao consegui enviar pro robo ({e}). O notebook esta na rede RoboBatalha?")
+        udp_ok = False
 
 
 def main():
@@ -423,9 +438,13 @@ def main():
             texto(frame, "C = CALIBRAR   R = RESETAR SIM   Q = SAIR", (12, h - 14), 0.42,
                   escurecer(COR_HUD_OURO, 0.8))
             online = int(agora * 2) % 2 == 0
-            cv2.circle(frame, (w - 150, h - 19), 4, COR_HUD if online else escurecer(COR_HUD, 0.4), -1, cv2.LINE_AA)
-            texto(frame, f"UDP {'ON ' if ENVIAR_UDP else 'OFF'} | SIM {'ON' if SIMULAR else 'OFF'}",
-                  (w - 140, h - 14), 0.42, escurecer(COR_HUD_OURO, 0.8))
+            udp_txt = "ROBO " + ("OFF" if not ENVIAR_UDP else "ON" if udp_ok else "SEM REDE")
+            status = f"{udp_txt} | SIM {'ON' if SIMULAR else 'OFF'}"
+            larg_status = cv2.getTextSize(status, FONTE, 0.42, 1)[0][0]
+            cor_status = COR_MAO_E if ENVIAR_UDP and not udp_ok else escurecer(COR_HUD_OURO, 0.8)
+            cv2.circle(frame, (w - larg_status - 22, h - 19), 4,
+                       COR_HUD if online else escurecer(COR_HUD, 0.4), -1, cv2.LINE_AA)
+            texto(frame, status, (w - larg_status - 12, h - 14), 0.42, cor_status)
             if SIMULAR:
                 if tecla == ord("r"):
                     sim.reset()

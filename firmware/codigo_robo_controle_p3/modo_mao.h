@@ -7,10 +7,11 @@
 #define MAO_SENHA      "12345678"   // mínimo 8 caracteres
 #define MAO_PORTA      4210
 #define MAO_TIMEOUT_MS 300          // sem pacote nesse tempo = comando inválido (para)
+#define MAO_MAX_CONEXOES 1          // só o notebook dos gestos entra na rede
 
 struct ComandoMao {
-  int8_t  aceleracao;  // -100..100
-  int8_t  direcao;     // -100..100
+  int8_t  aceleracao;  // -100..100 (positivo = frente)
+  int8_t  direcao;     // -100..100 (positivo = direita)
   int8_t  arma;        // -100..100 (sinal = sentido de rotação)
 };
 
@@ -19,8 +20,21 @@ static ComandoMao cmdMao = {0, 0, 0};
 static uint32_t   ultimoPacoteMao = 0;
 
 void iniciarModoMao() {
-  WiFi.softAP(MAO_SSID, MAO_SENHA);  // IP do robô: 192.168.4.1
-  udpMao.begin(MAO_PORTA);
+  // IP do robô: 192.168.4.1 | canal 1, rede visível, no máximo MAO_MAX_CONEXOES aparelho
+  bool apOk = WiFi.softAP(MAO_SSID, MAO_SENHA, 1, 0, MAO_MAX_CONEXOES);
+  bool udpOk = udpMao.begin(MAO_PORTA);
+  Serial.printf("Modo gestos: rede %s %s, IP %s, UDP %d %s\n", MAO_SSID, apOk ? "OK" : "FALHOU",
+                WiFi.softAPIP().toString().c_str(), MAO_PORTA, udpOk ? "OK" : "FALHOU");
+}
+
+// Imprime no serial, a cada 3 s, o estado da rede (ajuda a testar na bancada, com USB).
+void statusModoMao(bool modoGestos) {
+  static uint32_t ultimo = 0;
+  if (millis() - ultimo < 3000) return;
+  ultimo = millis();
+  Serial.printf("[wifi] rede %s IP %s | aparelhos conectados: %d | ultimo pacote ha %lu ms | modo %s\n",
+                WiFi.softAPSSID().c_str(), WiFi.softAPIP().toString().c_str(), WiFi.softAPgetStationNum(),
+                (unsigned long)(millis() - ultimoPacoteMao), modoGestos ? "GESTOS" : "CONTROLE");
 }
 
 // Lê todos os pacotes pendentes e fica com o mais recente.
