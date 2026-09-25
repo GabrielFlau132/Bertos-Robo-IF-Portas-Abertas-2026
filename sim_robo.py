@@ -52,7 +52,7 @@ class SimRobo:
 
         for p, q in zip(self.rastro, self.rastro[1:]):
             if abs(p[0] - q[0]) < 50 and abs(p[1] - q[1]) < 50:  # não liga ponto quando dá a volta na borda
-                cv2.line(img, p, q, (90, 90, 160), 1)
+                cv2.line(img, p, q, (150, 70, 110), 1)  # rastro roxo apagado
 
         caixa = cv2.boxPoints(((self.x, self.y), (60, 44), math.degrees(self.th)))
         cv2.fillPoly(img, [caixa.astype(np.int32)], (70, 110, 70))
@@ -60,7 +60,7 @@ class SimRobo:
 
         fx = self.x + 38 * math.cos(self.th)
         fy = self.y + 38 * math.sin(self.th)
-        cor_arma = (60, 60, 255) if arma else (120, 120, 120)
+        cor_arma = (255, 100, 190) if arma else (120, 120, 120)  # roxo (mesma cor da mão da arma)
         dx, dy = 22 * math.cos(self.ang_arma), 22 * math.sin(self.ang_arma)
         cv2.line(img, (int(fx - dx), int(fy - dy)), (int(fx + dx), int(fy + dy)), cor_arma, 4)
         cv2.circle(img, (int(fx), int(fy)), 5, cor_arma, -1)
@@ -68,7 +68,7 @@ class SimRobo:
         sentido = "HORARIO" if arma > 0 else "ANTI-HORARIO" if arma < 0 else "PARADA"
         self._barra(img, t - 80, "acel", acel, (80, 200, 80))
         self._barra(img, t - 55, "dir ", dire, (200, 160, 60))
-        self._barra(img, t - 30, "arma", arma, (60, 60, 255))
+        self._barra(img, t - 30, "arma", arma, (255, 100, 190))
         cv2.putText(img, f"arma: {sentido}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor_arma, 2)
         cv2.putText(img, "r = resetar robo", (t - 150, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
         return img

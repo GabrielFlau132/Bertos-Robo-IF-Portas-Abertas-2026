@@ -38,8 +38,9 @@ const int MIN_PWM = 0, MAX_PWM = 255;  // valores limite para o PWM da ESP32
 const uint32_t PERIODO_GESTOS_MS = 30;  // de quanto em quanto tempo aplica o comando dos gestos
 
 // Limite de velocidade da locomoção, em % do máximo (100 = sem limite, igual ao oficial).
-// "FRENTE" vale pra frente e ré; "GIRO" vale pra curva e pra girar no lugar.
-// Aplicado no comando antes da lógica oficial dos motores. A arma não é limitada.
+// Controle: "FRENTE" = andando (reduz o PWM final), "GIRO" = girando no lugar.
+// Gestos: "FRENTE" = peso da aceleração, "GIRO" = peso da curva na mistura.
+// A arma não é limitada.
 #ifndef LIMITE_CONTROLE_FRENTE
 #define LIMITE_CONTROLE_FRENTE 80
 #endif

@@ -9,10 +9,12 @@
        START/SELECT, L1 e setas/trava, e se ele desconectar o robô para (failsafe oficial).
        Sem pacote do PC por 300 ms, os motores param.
        LED azul no modo gestos: pisca devagar = sem pacotes do PC, rápido = recebendo.
-     - a lógica oficial de mistura dos motores foi movida, sem alteração, para a função
-       aplicaMovimento(), usada pelos dois modos.
-     - limite de velocidade da locomoção por modo (frente/ré e giro separados), aplicado
-       no comando antes de aplicaMovimento(): ver LIMITE_* em parametros.h.
+     - a lógica oficial de mistura dos motores foi movida para a função aplicaMovimento()
+       (modo controle). Única adição nela: o limite de velocidade, que reduz só o PWM
+       final (a mistura em si continua igual à oficial).
+     - modo gestos usa uma mistura própria, contínua (movimentoGestos): a oficial vira pro
+       lado errado com comando proporcional.
+     - limite de velocidade da locomoção por modo (frente/ré e giro): LIMITE_* em parametros.h.
    Arma pelo controle, setas, trava L3+R3 e START/SELECT continuam iguais. */
 
 #include <Bluepad32.h>
@@ -196,6 +198,16 @@ void aplicaMovimento(int32_t valorAnalogicoV, int32_t valorAnalogicoH) {
           }
         }
 
+        // Limite de velocidade do modo controle (não é do código oficial): reduz só o PWM
+        // final, então a mistura acima continua recebendo o comando cheio e se comporta
+        // igual ao oficial. Girando no lugar vale o limite de giro; andando, o de frente.
+        int limite = abs(valorAnalogicoV - PARADO_JOYSTICK_Y) <= TOLERANCIA_JOYSTICK
+                         ? LIMITE_CONTROLE_GIRO : LIMITE_CONTROLE_FRENTE;
+        pwmMotorDireito1 = pwmMotorDireito1 * limite / 100;
+        pwmMotorDireito2 = pwmMotorDireito2 * limite / 100;
+        pwmMotorEsquerdo1 = pwmMotorEsquerdo1 * limite / 100;
+        pwmMotorEsquerdo2 = pwmMotorEsquerdo2 * limite / 100;
+
         Serial.print("PWM Direito 1: ");
         Serial.println(pwmMotorDireito1);
         Serial.print("PWM Direito 2: ");
@@ -238,15 +250,34 @@ void armaGestos(int8_t arma) {
   }
 }
 
-// Converte o último comando dos gestos (-100..100) pra escala do analógico e aplica.
+// Locomoção pelos gestos. Mistura própria, contínua: a oficial só se comporta bem com o
+// analógico no fim do curso — com comando proporcional (gestos) ela vira pro lado errado
+// em curvas leves e "salta" perto do centro, o que impedia andar reto.
+// Roda esquerda = frente + curva, roda direita = frente - curva, com os limites do modo.
+// Usa os mesmos pinos/sentidos da lógica oficial (frente = "sentido" do motor direito e
+// "velocidade" do motor esquerdo), então as setas continuam valendo.
+void movimentoGestos(int8_t acel, int8_t dire) {
+  float frente = constrain(acel, -100, 100) / 100.0f * LIMITE_GESTOS_FRENTE / 100.0f;
+  float curva = constrain(dire, -100, 100) / 100.0f * LIMITE_GESTOS_GIRO / 100.0f;
+  float esq = frente + curva, dir = frente - curva;
+  float maior = fmaxf(fabsf(esq), fabsf(dir));
+  if (maior > 1) {  // mantém a proporção entre as rodas em vez de cortar uma delas
+    esq /= maior;
+    dir /= maior;
+  }
+  int pwmEsq = (int)(fabsf(esq) * MAX_PWM + 0.5f);
+  int pwmDir = (int)(fabsf(dir) * MAX_PWM + 0.5f);
+
+  analogWrite(sentidoMotorDireito, dir > 0 ? pwmDir : 0);
+  analogWrite(velocidadeMotorDireito, dir < 0 ? pwmDir : 0);
+  analogWrite(velocidadeMotorEsquerdo, esq > 0 ? pwmEsq : 0);
+  analogWrite(sentidoMotorEsquerdo, esq < 0 ? pwmEsq : 0);
+}
+
+// Aplica o último comando dos gestos (-100..100).
 // Sem pacote recente, lerModoMao() já zerou o comando: tudo para.
 void aplicaGestos() {
-  int32_t valorAnalogicoV = map(-constrain(cmdMao.aceleracao, -100, 100), -100, 100,
-                                MIN_JOYSTICK_Y, MAX_JOYSTICK_Y);  // frente = negativo
-  int32_t valorAnalogicoH = map(constrain(cmdMao.direcao, -100, 100), -100, 100,
-                                MIN_JOYSTICK_X, MAX_JOYSTICK_X);  // direita = positivo
-  aplicaMovimento(valorAnalogicoV * LIMITE_GESTOS_FRENTE / 100,
-                  valorAnalogicoH * LIMITE_GESTOS_GIRO / 100);
+  movimentoGestos(cmdMao.aceleracao, cmdMao.direcao);
   armaGestos(cmdMao.arma);
 }
 
@@ -371,8 +402,7 @@ void processControllers() {
           // Lê valor em X do analógico direito (R-right) = direção.
           int32_t valorAnalogicoH = myController->axisRX();
 
-          aplicaMovimento(valorAnalogicoV * LIMITE_CONTROLE_FRENTE / 100,
-                          valorAnalogicoH * LIMITE_CONTROLE_GIRO / 100);
+          aplicaMovimento(valorAnalogicoV, valorAnalogicoH);
         }
       }
 

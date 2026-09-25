@@ -4,7 +4,7 @@ Todos os sketches usam a placa **ESP32 + Bluepad32** (`esp32-bluepad32:esp32:esp
 
 | Pasta | Origem | Situação | Para que serve |
 |---|---|---|---|
-| `codigo_robo_controle_p3/` | oficial + mudanças | **firmware do robô** | L1 = modo controle (R2/L2 frente/trás, analógico direito direção, O/□/△ arma), R1 = modo gestos (comandos do `controle_mao.py` por Wi-Fi/UDP, via `modo_mao.h`), setas (padrão = seta ↓), L3+R3 trava. Tem limite de velocidade por modo (`LIMITE_*` no `parametros.h`). As mudanças estão descritas no topo do `.ino`. Testado no robô |
+| `codigo_robo_controle_p3/` | oficial + mudanças | **firmware do robô** | L1 = modo controle (R2/L2 frente/trás, analógico direito direção, O/□/△ arma), R1 = modo gestos (comandos do `controle_mao.py` por Wi-Fi/UDP, via `modo_mao.h`), setas (padrão = seta ↓), L3+R3 trava. Tem limite de velocidade por modo (`LIMITE_*` no `parametros.h`). O modo gestos usa uma mistura de motores própria, porque a oficial vira para o lado errado com comando proporcional. As mudanças estão descritas no topo do `.ino`. Testado no robô |
 | `descobrir_parametros_controle/` | oficial, sem mudança | utilitário | Pareia o controle (apaga pareamentos antigos) e imprime no serial o MAC e os valores de todos os botões e eixos. Serviu para medir R2/L2 e o analógico direito |
 | `filtro_mac_controle/` | oficial, sem mudança | utilitário (não usado ainda) | Grava na ESP32 uma lista de controles permitidos (fica salva mesmo trocando o firmware). Troque o MAC no código pelo do seu controle antes de gravar |
 | `filtro_com_descobrir_parametros/` | oficial, sem mudança | utilitário (não usado ainda) | Os dois anteriores juntos |

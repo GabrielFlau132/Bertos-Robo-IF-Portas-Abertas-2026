@@ -15,7 +15,10 @@ Robô de batalha (categoria cupim) pilotado de **dois jeitos, um de cada vez**, 
 | Gestos (Python) | ✅ pilotando o robô de verdade pelo Wi-Fi (`ENVIAR_UDP = True`) |
 | Integração controle + gestos (R1/L1) | ✅ **testada no robô pelo usuário em 2026-09-24: "funcionando lindamente"** |
 | Wi-Fi + Bluetooth juntos na ESP32 | ✅ sem problema (controle responsivo com a rede ligada) |
-| Limite de velocidade (pedido depois do teste: "anda e principalmente gira rápido demais") | ✅ gravado · ⏳ usuário ainda não testou os valores (ajustar em `parametros.h`) |
+| Limite de velocidade | ✅ testado e aprovado pelo usuário (valores em `parametros.h`) |
+| Direção por gestos (difícil andar reto) | ✅ corrigido no firmware (mistura própria) e no Python (zona morta + curva suave) · ⏳ **firmware ainda não gravado**, usuário não testou |
+| Barra de calibração simples (no lugar do anel animado) | ✅ aprovada ("tá incrível") |
+| Paleta roxo + verde (no lugar de vermelho/amarelo) | ✅ feita · ⏳ usuário não viu na câmera real |
 
 ---
 
@@ -65,7 +68,10 @@ Código oficial com estas mudanças (listadas no topo do `.ino`):
    - Sem pacote por **300 ms** → tudo parado. Controle desconectado → robô desliga (failsafe oficial), mesmo no modo gestos. SELECT/desconexão voltam pro modo controle.
    - Arma pelos gestos: sinal = sentido (positivo = sentido da BOLINHA), módulo = velocidade (0–100%).
    - **LED azul no modo gestos:** pisca devagar (1 Hz) = sem pacotes do PC; rápido (5 Hz) = recebendo. No modo controle continua sendo a trava.
-4. A mistura oficial dos motores foi movida **sem alteração** para `aplicaMovimento(V, H)`, usada pelos dois modos. Gestos: `V = map(-acel, -100..100 → -512..508)`, `H = map(dire, -100..100 → -512..508)`.
+4. A mistura oficial dos motores foi movida para `aplicaMovimento(V, H)`, usada **só no modo controle**. Única adição nela: o limite de velocidade reduz o PWM final.
+   - **Descoberta importante:** a mistura oficial só se comporta bem com o comando **no fim do curso** (o analógico/gatilho no máximo). Com comando parcial ela vira pro **lado errado** em curvas leves e "salta" perto do centro (ex.: frente a 60% + mão um pouco pra direita → roda direita de 153 pra 202 → robô vira pra esquerda). Por isso:
+     - no modo controle o limite é aplicado **no PWM final** (a mistura recebe o comando cheio, igual ao oficial). Uma primeira versão reduzia o comando antes da mistura e causava esse defeito — corrigido;
+     - o modo gestos usa **mistura própria, contínua** (`movimentoGestos`): roda esquerda = frente + curva, direita = frente − curva, com os mesmos pinos/sentidos da oficial (as setas continuam valendo).
 5. `modo_mao.h` fica dentro da pasta do sketch; rede aceita **1 aparelho** só.
 6. **Limite de velocidade da locomoção por modo** (`LIMITE_*` em `parametros.h`, em % do máximo; aplicado no comando antes de `aplicaMovimento`, então a lógica oficial continua igual). A arma não é limitada.
 
@@ -74,7 +80,8 @@ Código oficial com estas mudanças (listadas no topo do `.ino`):
    | Modo controle | `LIMITE_CONTROLE_FRENTE = 80` | `LIMITE_CONTROLE_GIRO = 60` |
    | Modo gestos | `LIMITE_GESTOS_FRENTE = 60` | `LIMITE_GESTOS_GIRO = 40` |
 
-   Conferido no PC: R2 → PWM 204 (80%), girar pelo controle → 153 (60%), gestos frente → 153 (60%), gestos giro → 101 (40%). Com todos em 100 o comportamento volta a ser idêntico ao oficial. O simulador do Python **não** mostra esse limite (ele desenha o comando cheio).
+   No controle: andando vale `FRENTE`, girando no lugar vale `GIRO`. Nos gestos: `FRENTE` e `GIRO` são os pesos da aceleração e da curva na mistura (frente + curva cheias podem somar 100% numa roda).
+   Conferido no PC: R2 → PWM 204 (80%), R2 + direita leve → vira pra direita (esq 204 / dir 196), girar pelo controle → 153 (60%), gestos frente → 153 (60%), gestos giro → 102 (40%); curva dos gestos contínua e sempre pro lado certo. Com os limites do controle em 100 o modo controle é idêntico ao oficial. O simulador do Python **não** mostra esse limite (ele desenha o comando cheio).
 
 | Comando | Função |
 |---|---|
@@ -121,11 +128,13 @@ Mapeamento de gestos (definido pelo usuário — não mudar):
 
 Como está implementado:
 - Frame espelhado. **Cada mão é atribuída ao pulso do Pose mais próximo** (não usa o rótulo Left/Right do Hands, que às vezes rotula as duas iguais). Mãos a mais de `MAO_DIST_MAX = 0.8` larguras de ombro de qualquer pulso são ignoradas (gente atrás do operador) e aparecem cinza.
-- **Calibração: tecla `c`** → contagem de 5 s com o robô parado → salva a posição neutra; se faltar mão no fim, espera mais 2 s e diz o que faltou. (A calibração por gesto de X foi removida — não funcionava.)
+- **Calibração: tecla `c`** → contagem de 5 s com o robô parado → salva a posição neutra; se faltar mão no fim, espera mais 2 s e diz o que faltou. (A calibração por gesto de X foi removida — não funcionava.) Mostrada numa **barra de progresso simples** (cartão escuro na parte de baixo, barra verde; roxa pulsando se faltar mão) — o usuário pediu pra trocar o anel animado "tech" por ela.
 - Profundidade = tamanho da palma ÷ largura dos ombros; curva = x do pulso direito − ombro direito, em larguras de ombro. EMA `SUAVIZACAO = 0.4`.
-- Visual estilo HUD "Tony Stark" (pedido do usuário): sem esqueleto do corpo nem da mão; repulsor brilhando na palma (apagado = mão fechada), marcas nas pontas dos dedos, rótulos com os valores, anel grande de contagem na calibração, brilho neon, painel com canto cortado. O usuário pediu pra **tirar os anéis em volta das mãos** — não recolocar.
+- **Direção:** `CURVA_DZ = 0.25`, `CURVA_ALCANCE = 0.8`, `CURVA_EXPO = 2.0` (curva ao quadrado: suave perto do centro). Deslocamento → curva: 0,3 → 0 · 0,4 → 7 · 0,5 → 20 · 0,6 → 40 · 0,7 → 66 · 0,8 → 100. Antes (0.15/0.7 linear) 0,3 já dava 27 — difícil andar reto (junto com o defeito da mistura oficial no firmware).
+- **Paleta roxo + verde** (pedido do usuário, no lugar do vermelho/dourado): roxo = acentos, painel e arma; verde = destaque, locomoção e barra de calibração. Cores só nas constantes `COR_*` no topo do `controle_mao.py` (BGR); o `sim_robo.py` usa o mesmo roxo pra arma.
+- Visual estilo HUD "Tony Stark" (pedido do usuário): sem esqueleto do corpo nem da mão; repulsor brilhando na palma (apagado = mão fechada), marcas nas pontas dos dedos, rótulos com os valores, brilho neon, painel com canto cortado. O usuário pediu pra **tirar os anéis em volta das mãos** e o **anel animado da calibração** — não recolocar.
 - Teclas: `c` calibra, `r` reseta o simulador, `q` sai.
-- Protocolo UDP: 5 bytes `struct.pack("<BbbbB", 0xAA, acel, dire, arma, seq)`, valores −100..100, ~30x/s, pra `192.168.4.1:4210`. `ENVIAR_UDP = True`. Se o envio falhar (sem rede), avisa no terminal, mostra "ROBO SEM REDE" em vermelho no rodapé e continua rodando. Ao sair, manda um pacote de parada.
+- Protocolo UDP: 5 bytes `struct.pack("<BbbbB", 0xAA, acel, dire, arma, seq)`, valores −100..100, ~30x/s, pra `192.168.4.1:4210`. `ENVIAR_UDP = True`. Se o envio falhar (sem rede), avisa no terminal, mostra "ROBO SEM REDE" em roxo claro no rodapé e continua rodando. Ao sair, manda um pacote de parada.
 
 Problemas conhecidos (não resolvidos):
 - **Ré quase inalcançável e aceleração máxima difícil:** o tamanho da palma varia com 1/distância; a ~2 m da câmera, 100% de ré exigiria recuar a mão ~1,6 m. Sugestão: usar `log(r/cal)` e diminuir `PROF_DZ`/`PROF_ALCANCE`.
@@ -144,7 +153,7 @@ Obs.: o Windows às vezes demora a mostrar a rede nova na lista de Wi-Fi (a list
 
 ## Próximos passos
 Integração testada e aprovada no robô (2026-09-24). Pendências:
-1. **Testar os limites de velocidade** gravados e ajustar os `LIMITE_*` em `parametros.h` até o usuário gostar (regravar depois de mudar).
+1. **Gravar o firmware com a mistura dos gestos corrigida** e testar se ficou fácil andar reto; se a curva ficar fraca/forte demais, ajustar `CURVA_*` no `controle_mao.py` (não precisa regravar) ou `LIMITE_GESTOS_GIRO` no firmware.
 2. Partida suave da arma ("acelerar" a arma) — perguntar o que o usuário quer; hoje liga a 100% na hora.
 3. Escala de profundidade dos gestos (ré difícil de alcançar) — ver "Problemas conhecidos".
 4. Trocar a senha da rede `RoboBatalha` antes de evento aberto.

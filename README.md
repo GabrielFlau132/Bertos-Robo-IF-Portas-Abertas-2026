@@ -85,10 +85,10 @@ Precisa de **Python 3.12**. O `mediapipe==0.10.14` não instala em versões mais
 .\venv\Scripts\python.exe controle_mao.py
 ```
 
-Teclas: `c` calibra (fique na posição neutra com as duas mãos na câmera durante a contagem de 5 s), `r` reseta o simulador, `q` sai.
+Teclas: `c` calibra (fique na posição neutra com as duas mãos na câmera enquanto a barra enche, 5 s), `r` reseta o simulador, `q` sai.
 
 Gestos:
-- **Mão direita:** aberta anda. Levar a mão para frente ou para trás acelera ou dá ré, e para os lados faz a curva.
+- **Mão direita:** aberta anda. Levar a mão para frente ou para trás acelera ou dá ré, e para os lados faz a curva. Perto da posição neutra ela conta como "reto", e a curva cresce aos poucos. Ajuste em `CURVA_*` no topo do `controle_mao.py`.
 - **Mão esquerda:** aberta liga a arma. Levar a mão para frente ou para trás escolhe o sentido.
 
 **Pilotar o robô por gestos:**
@@ -97,7 +97,7 @@ Gestos:
 3. No controle, aperte **START** e depois **R1**. O LED azul da ESP32 deve piscar rápido.
 4. **L1** devolve a pilotagem ao controle. **SELECT** desliga tudo.
 
-O rodapé da tela mostra `ROBO ON` quando está enviando e `ROBO SEM REDE`, em vermelho, se o envio falhar. Estando em outra rede Wi-Fi, o envio pode não dar erro: quem confirma que o robô está recebendo é o LED piscando rápido.
+O rodapé da tela mostra `ROBO ON` quando está enviando e `ROBO SEM REDE`, em roxo claro, se o envio falhar. Estando em outra rede Wi-Fi, o envio pode não dar erro: quem confirma que o robô está recebendo é o LED piscando rápido.
 
 ## Segurança
 - Teste sempre com o robô **suspenso** (rodas sem tocar no chão) antes de ir para o chão.

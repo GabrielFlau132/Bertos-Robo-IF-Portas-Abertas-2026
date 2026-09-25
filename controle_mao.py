@@ -1,4 +1,4 @@
-# controle_mao.py — controle por dois braços (MediaPipe Hands + Pose)
+# .\venv\Scripts\python.exe controle_mao.py  
 #
 # Braço DIREITO (locomoção)
 #   mão aberta  = anda | mão fechada/fora da câmera = para
@@ -43,19 +43,22 @@ FPS_ENVIO = 30
 
 PROF_DZ = 0.12        # variação de tamanho da palma ignorada (12%)
 PROF_ALCANCE = 0.45   # variação que dá 100% (45%)
-CURVA_DZ = 0.15       # em larguras de ombro
-CURVA_ALCANCE = 0.7
+CURVA_DZ = 0.25       # em larguras de ombro: faixa em volta do neutro que conta como "reto"
+CURVA_ALCANCE = 0.8   # deslocamento que dá 100% de curva
+CURVA_EXPO = 2.0      # 1 = linear; maior = curva bem suave perto do centro e forte só no fim
 ARMA_MIN = 70         # % assim que sai da zona morta
 SUAVIZACAO = 0.4      # 0..1: maior = mais rápido e mais ruidoso
 CAL_TIMER_SEGUNDOS = 5.0   # contagem depois de apertar 'c'
 CAL_JANELA_SEGUNDOS = 2.0  # depois da contagem, tolerancia p/ as duas maos aparecerem
 MAO_DIST_MAX = 0.8    # distancia max (em larguras de ombro) entre a mao e o pulso do Pose
 
-COR_HUD = (0, 30, 220)       # vermelho (BGR) - acentos do HUD
-COR_HUD_OURO = (0, 170, 255)  # dourado - detalhe secundario
-COR_NUCLEO = (210, 240, 255)  # branco quente (núcleo do repulsor, números)
-COR_MAO_D = COR_HUD_OURO      # mão direita (locomoção)
-COR_MAO_E = (40, 50, 255)     # mão esquerda (arma), vermelho mais vivo que o do HUD
+# Paleta roxo + verde (valores em BGR, como o OpenCV usa)
+COR_HUD = (255, 60, 150)       # roxo - acentos do HUD (molduras, bordas, títulos)
+COR_HUD_VERDE = (130, 255, 60)  # verde - destaque (estado, barra de calibração)
+COR_NUCLEO = (240, 255, 235)   # branco levemente esverdeado (núcleo do repulsor, números)
+COR_MAO_D = COR_HUD_VERDE      # mão direita (locomoção)
+COR_MAO_E = (255, 100, 190)    # mão esquerda (arma), roxo mais claro que o do HUD
+COR_FUNDO_PAINEL = (22, 10, 18)  # fundo escuro arroxeado dos painéis
 FONTE = cv2.FONT_HERSHEY_SIMPLEX
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -179,25 +182,52 @@ def hud_mao(hud, lm, w, h, cor, ativa, t, linhas, lado):
             texto(hud, txt, (x_txt, y), 0.55, COR_NUCLEO, 1, larg_max=larg)
 
 
-def hud_contagem(hud, cx, cy, t, restante, total):
-    """anel grande no meio da tela; restante=None = contagem acabou, esperando as mãos"""
-    r = 70
-    cv2.circle(hud, (cx, cy), r, escurecer(COR_HUD, 0.5), 2, cv2.LINE_AA)
-    if restante is not None:
-        cv2.ellipse(hud, (cx, cy), (r, r), -90, 0, 360 * (1 - restante / total),
-                    COR_HUD_OURO, 6, cv2.LINE_AA)
-        texto_centro(hud, str(math.ceil(restante)), cx, cy, 2.2, COR_NUCLEO, 4)
-        rotulo = "CALIBRANDO - FIQUE NA POSICAO NEUTRA"
+def ret_arredondado(img, x0, y0, x1, y1, r, cor):
+    """retângulo preenchido com cantos arredondados"""
+    cv2.rectangle(img, (x0 + r, y0), (x1 - r, y1), cor, -1)
+    cv2.rectangle(img, (x0, y0 + r), (x1, y1 - r), cor, -1)
+    for cx, cy in ((x0 + r, y0 + r), (x1 - r, y0 + r), (x0 + r, y1 - r), (x1 - r, y1 - r)):
+        cv2.circle(img, (cx, cy), r, cor, -1, cv2.LINE_AA)
+
+
+def barra_calibracao(frame, hud, t, restante, total):
+    """
+    Cartão com barra de progresso na parte de baixo da tela. O fundo, os textos e o
+    trilho vão no frame; o preenchimento vai na camada 'hud' (ganha o brilho neon).
+    restante=None = contagem acabou e ainda falta mão: barra cheia pulsando em roxo.
+    """
+    h, w = frame.shape[:2]
+    larg, alt = min(440, w - 60), 84
+    x0, y0 = (w - larg) // 2, h - 175
+    x1, y1 = x0 + larg, y0 + alt
+
+    roi = frame[y0:y1, x0:x1]
+    fundo = roi.copy()
+    ret_arredondado(fundo, 0, 0, larg - 1, alt - 1, 14, COR_FUNDO_PAINEL)
+    cv2.addWeighted(fundo, 0.8, roi, 0.2, 0, roi)
+
+    if restante is None:
+        titulo, cor = "MOSTRE AS DUAS MAOS", COR_MAO_E
+        detalhe, direita = "AS DUAS MAOS PRECISAM APARECER NA CAMERA", ""
+        progresso = 1.0
+        cor_barra = escurecer(cor, 0.45 + 0.55 * (0.5 + 0.5 * math.sin(t * 6)))
     else:
-        if int(t * 4) % 2:
-            cv2.circle(hud, (cx, cy), r, COR_HUD, 6, cv2.LINE_AA)
-        texto_centro(hud, "?", cx, cy, 2.2, COR_NUCLEO, 4)
-        rotulo = "MOSTRE AS DUAS MAOS"
-    ang = (t * 120) % 360
-    for k in range(4):
-        cv2.ellipse(hud, (cx, cy), (r + 14, r + 14), -ang + k * 90, 0, 40, COR_HUD, 2, cv2.LINE_AA)
-        cv2.ellipse(hud, (cx, cy), (r + 24, r + 24), ang + k * 90 + 45, 0, 15, COR_HUD_OURO, 1, cv2.LINE_AA)
-    texto_centro(hud, rotulo, cx, cy + r + 44, 0.6, COR_HUD_OURO, 2, larg_max=2 * cx - 40)
+        titulo, cor = "CALIBRANDO", COR_HUD_VERDE
+        detalhe, direita = "FIQUE NA POSICAO NEUTRA, MAOS NA CAMERA", f"{restante:.1f} s"
+        progresso = max(0.0, min(1.0, 1 - restante / total))
+        cor_barra = cor
+
+    texto(frame, titulo, (x0 + 20, y0 + 30), 0.62, cor, 2)
+    if direita:
+        tw = cv2.getTextSize(direita, FONTE, 0.62, 2)[0][0]
+        texto(frame, direita, (x1 - 20 - tw, y0 + 30), 0.62, COR_NUCLEO, 2)
+    texto(frame, detalhe, (x0 + 20, y0 + 51), 0.4, (165, 165, 165), 1, larg_max=larg - 40)
+
+    bx0, bx1, yb, esp = x0 + 22, x1 - 22, y0 + 68, 10
+    cv2.line(frame, (bx0, yb), (bx1, yb), (62, 48, 58), esp, cv2.LINE_AA)  # trilho
+    xf = bx0 + int((bx1 - bx0) * progresso)
+    if xf > bx0:
+        cv2.line(hud, (bx0, yb), (xf, yb), cor_barra, esp, cv2.LINE_AA)  # pontas redondas
 
 
 def painel_status(frame, estado, linhas, larg=440):
@@ -206,12 +236,12 @@ def painel_status(frame, estado, linhas, larg=440):
     roi = frame[:alt + 1, :larg + 1]
     pts = np.array([(0, 0), (larg, 0), (larg, alt - 20), (larg - 20, alt), (0, alt)], np.int32)
     fundo = roi.copy()
-    cv2.fillPoly(fundo, [pts], (14, 8, 8))
+    cv2.fillPoly(fundo, [pts], COR_FUNDO_PAINEL)
     cv2.addWeighted(fundo, 0.65, roi, 0.35, 0, roi)
     cv2.polylines(frame, [pts[1:]], False, COR_HUD, 1, cv2.LINE_AA)
-    cv2.line(frame, (0, 1), (130, 1), COR_HUD_OURO, 3)
+    cv2.line(frame, (0, 1), (130, 1), COR_HUD_VERDE, 3)
     texto(frame, "BERTOS  //  CONTROLE POR GESTOS", (12, 20), 0.42, COR_HUD, 1)
-    texto(frame, estado, (12, 46), 0.6, COR_HUD_OURO, 2, larg_max=larg - 24)
+    texto(frame, estado, (12, 46), 0.6, COR_HUD_VERDE, 2, larg_max=larg - 24)
     for i, (txt, cor) in enumerate(linhas):
         texto(frame, txt, (12, 72 + 24 * i), 0.5, cor, 1, larg_max=larg - 24)
 
@@ -347,7 +377,8 @@ def main():
                             estado = "ATIVO"
                             if mao_d and ab_d:
                                 acel = int(100 * escala(r_d / cal["r_dir"] - 1, PROF_DZ, PROF_ALCANCE))
-                                dire = int(100 * escala(x_d - cal["x_dir"], CURVA_DZ, CURVA_ALCANCE))
+                                curva = escala(x_d - cal["x_dir"], CURVA_DZ, CURVA_ALCANCE)
+                                dire = int(100 * math.copysign(abs(curva) ** CURVA_EXPO, curva))
                             if mao_e and ab_e:
                                 v = escala(r_e / cal["r_arma"] - 1, PROF_DZ, PROF_ALCANCE)
                                 if v != 0:
@@ -422,10 +453,10 @@ def main():
                 else:  # mão de outra pessoa / longe do pulso: só um retículo apagado
                     desenhar_alvo(hud, lm, w, h, (70, 70, 70), tam=10)
             if fase == "contando":
-                hud_contagem(hud, w // 2, h // 2, agora, contagem, CAL_TIMER_SEGUNDOS)
+                barra_calibracao(frame, hud, agora, contagem, CAL_TIMER_SEGUNDOS)
             if agora < cal_msg_ate:
                 if cal_msg == "CALIBRADO!":
-                    texto_centro(hud, "CALIBRADO", w // 2, h - 70, 1.3, COR_HUD_OURO, 3)
+                    texto_centro(hud, "CALIBRADO", w // 2, h - 70, 1.3, COR_HUD_VERDE, 3)
                 else:
                     texto_centro(hud, cal_msg, w // 2, h - 70, 0.8, COR_MAO_E, 2, larg_max=w - 40)
             cantos(hud, 4, 4, w - 4, h - 4, COR_HUD, tam=30, esp=2)
@@ -436,12 +467,12 @@ def main():
                 (f"ARMA       {txt_e:<8} {arma:+4d}", COR_MAO_E),
             ])
             texto(frame, "C = CALIBRAR   R = RESETAR SIM   Q = SAIR", (12, h - 14), 0.42,
-                  escurecer(COR_HUD_OURO, 0.8))
+                  escurecer(COR_HUD_VERDE, 0.8))
             online = int(agora * 2) % 2 == 0
             udp_txt = "ROBO " + ("OFF" if not ENVIAR_UDP else "ON" if udp_ok else "SEM REDE")
             status = f"{udp_txt} | SIM {'ON' if SIMULAR else 'OFF'}"
             larg_status = cv2.getTextSize(status, FONTE, 0.42, 1)[0][0]
-            cor_status = COR_MAO_E if ENVIAR_UDP and not udp_ok else escurecer(COR_HUD_OURO, 0.8)
+            cor_status = COR_MAO_E if ENVIAR_UDP and not udp_ok else escurecer(COR_HUD_VERDE, 0.8)
             cv2.circle(frame, (w - larg_status - 22, h - 19), 4,
                        COR_HUD if online else escurecer(COR_HUD, 0.4), -1, cv2.LINE_AA)
             texto(frame, status, (w - larg_status - 12, h - 14), 0.42, cor_status)
